@@ -1,20 +1,34 @@
 // frontend/src/components/layout/LeftPanel.tsx
 // 左栏：品牌区 + 导航列表（工作台/版本树/知识库/JD分析/Gap/时间线）
 //       + 上传区（简历+知识素材）+ 知识库状态
+//
+// US-3：第二个 UploadZone 接入 uploadKnowledge；新增 onNavigate 回调；
+//       KnowledgeStatus 通过 refreshKey 接收外部刷新信号。
 
 import { useState } from 'react';
 import UploadZone from '@/components/common/UploadZone';
 import KnowledgeStatus from '@/components/common/KnowledgeStatus';
+import { uploadKnowledge } from '@/lib/api';
+import type { ActiveView } from '@/types/knowledge';
 
-const NAV_ITEMS = [
-  { label: '总览面板', icon: 'overview', active: true },
-  { label: '简历版本分支', icon: 'tree', badge: '3' },
-  { label: '个人知识库 (RAG)', icon: 'kb', badge: '12' },
+/** 导航项：label 为展示文案，view 为对应的中栏视图（可选） */
+interface NavItem {
+  label: string;
+  icon: string;
+  badge?: string;
+  active?: boolean;
+  view?: ActiveView;
+}
+
+const NAV_ITEMS: NavItem[] = [
+  { label: '总览面板', icon: 'overview', view: 'version-tree', active: true },
+  { label: '简历版本分支', icon: 'tree', badge: '3', view: 'version-tree' },
+  { label: '个人知识库 (RAG)', icon: 'kb', badge: '12', view: 'knowledge' },
   { label: '职位截图分析', icon: 'jd' },
   { label: '技能差距分析', icon: 'gap' },
   { label: '投递时间线', icon: 'timeline', badge: '5' },
   { label: '设置', icon: 'settings' },
-] as const;
+];
 
 const NAV_ICONS: Record<string, React.ReactNode> = {
   overview: (
@@ -65,10 +79,28 @@ const NAV_ICONS: Record<string, React.ReactNode> = {
 interface LeftPanelProps {
   /** 简历上传+解析成功后触发，用于刷新版本树 */
   onTreeRefresh?: () => void;
+  /** 知识素材上传成功后触发，用于刷新 KnowledgeStatus */
+  onKnowledgeRefresh?: () => void;
+  /** KnowledgeStatus 的刷新 key，变化时重新拉取 stats */
+  knowledgeRefreshKey?: number;
+  /** 导航项点击回调，通知父组件切换中栏视图 */
+  onNavigate?: (view: ActiveView) => void;
 }
 
-export default function LeftPanel({ onTreeRefresh }: LeftPanelProps) {
+export default function LeftPanel({
+  onTreeRefresh,
+  onKnowledgeRefresh,
+  knowledgeRefreshKey = 0,
+  onNavigate,
+}: LeftPanelProps) {
   const [activeNav, setActiveNav] = useState('总览面板');
+
+  function handleNavClick(item: NavItem) {
+    setActiveNav(item.label);
+    if (item.view) {
+      onNavigate?.(item.view);
+    }
+  }
 
   return (
     <aside
@@ -104,7 +136,7 @@ export default function LeftPanel({ onTreeRefresh }: LeftPanelProps) {
         {NAV_ITEMS.map((item) => (
           <div
             key={item.label}
-            onClick={() => setActiveNav(item.label)}
+            onClick={() => handleNavClick(item)}
             className={`flex items-center gap-3 px-3 py-2 rounded-md cursor-pointer transition-all mb-0.5 border-l-2 text-sm ${
               activeNav === item.label
                 ? 'bg-brand-primary-muted text-brand-primary border-brand-primary font-medium'
@@ -118,7 +150,7 @@ export default function LeftPanel({ onTreeRefresh }: LeftPanelProps) {
               {NAV_ICONS[item.icon]}
             </span>
             <span>{item.label}</span>
-            {'badge' in item && item.badge && (
+            {item.badge && (
               <span
                 className={`ml-auto font-mono text-xs px-2 rounded-full min-w-[20px] text-center ${
                   activeNav === item.label
@@ -143,6 +175,12 @@ export default function LeftPanel({ onTreeRefresh }: LeftPanelProps) {
         <UploadZone
           title="注入知识素材 (周报/论文/CTF/博客)"
           hint="丰富个人知识库以优化简历"
+          accept=".pdf,.docx,.md,.txt"
+          uploadFn={uploadKnowledge}
+          parseFn={null}
+          successText="已注入知识库"
+          invalidTypeMessage="仅支持 PDF / Word / Markdown / TXT 文件"
+          onFileUploaded={() => onKnowledgeRefresh?.()}
           icon={
             <svg
               width="24"
@@ -162,7 +200,7 @@ export default function LeftPanel({ onTreeRefresh }: LeftPanelProps) {
       </div>
 
       {/* Knowledge base status */}
-      <KnowledgeStatus />
+      <KnowledgeStatus refreshKey={knowledgeRefreshKey} />
     </aside>
   );
 }

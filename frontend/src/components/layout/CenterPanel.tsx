@@ -1,21 +1,31 @@
 // frontend/src/components/layout/CenterPanel.tsx
 // 中栏：面包屑 + Tab Pills（版本树/预览/Diff）+ VersionTree 画布
 // US-2：联动节点选中、详情浮层、新建节点弹窗、面包屑动态路径
+// US-3：支持 activeView 切换（'version-tree' | 'knowledge'），
+//       knowledge 模式下渲染 KnowledgeView 替代版本树
 
 import { useCallback, useState } from 'react';
 import Breadcrumb from '@/components/common/Breadcrumb';
 import VersionTree from '@/components/tree/VersionTree';
 import NodeDetailPanel from '@/components/tree/NodeDetailPanel';
 import CreateNodeModal from '@/components/tree/CreateNodeModal';
+import KnowledgeView from '@/components/knowledge/KnowledgeView';
 import type { ResumeNode, TreeData } from '@/types/tree';
+import type { ActiveView } from '@/types/knowledge';
 
 const TAB_PILLS = ['版本树', '编辑器', 'Diff 对比'] as const;
 
 interface CenterPanelProps {
+  /** 中栏当前视图：版本树 / 知识库 */
+  activeView?: ActiveView;
   /** 版本树刷新 key，变化时重新拉取 */
   treeRefreshKey?: number;
   /** 触发版本树刷新（新建节点后调用，递增 treeRefreshKey） */
   onTreeRefresh?: () => void;
+  /** 知识库刷新 key，变化时重新拉取文档列表 */
+  knowledgeRefreshKey?: number;
+  /** 触发知识库刷新（删除后递增 knowledgeRefreshKey） */
+  onKnowledgeRefresh?: () => void;
 }
 
 /**
@@ -37,8 +47,11 @@ function computePath(tree: TreeData | null, node: ResumeNode | null): string[] {
 }
 
 export default function CenterPanel({
+  activeView = 'version-tree',
   treeRefreshKey,
   onTreeRefresh,
+  knowledgeRefreshKey,
+  onKnowledgeRefresh,
 }: CenterPanelProps) {
   const [activeTab, setActiveTab] = useState<string>('版本树');
   const [selectedNode, setSelectedNode] = useState<ResumeNode | null>(null);
@@ -58,6 +71,18 @@ export default function CenterPanel({
     setShowCreateModal(false);
     onTreeRefresh?.();
   }, [onTreeRefresh]);
+
+  // 知识库视图：渲染 KnowledgeView，不显示版本树 Tab / 面包屑
+  if (activeView === 'knowledge') {
+    return (
+      <main className="flex-1 flex flex-col overflow-hidden bg-bg-primary">
+        <KnowledgeView
+          refreshKey={knowledgeRefreshKey}
+          onKnowledgeRefresh={onKnowledgeRefresh}
+        />
+      </main>
+    );
+  }
 
   const breadcrumbPath = computePath(tree, selectedNode);
 

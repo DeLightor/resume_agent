@@ -1,7 +1,12 @@
 // frontend/src/components/common/UploadZone.tsx
 // 拖拽上传区
-// - 当传入 onFileUploaded 时为交互式上传组件（拖拽 / 点击选择 / 上传 → 解析 → 回调）
+// - 当传入 onFileUploaded 时为交互式上传组件（拖拽 / 点击选择 / 上传 → [可选解析] → 回调）
 // - 否则退化为静态可点击占位（用于知识素材等暂不接后端的入口）
+//
+// 支持两种上传流水线：
+// 1. 简历模式（默认）：uploadResume(file) → parseResume(id) → onFileUploaded(ParseResponse)
+// 2. 知识库模式：传入 uploadFn=uploadKnowledge + parseFn=null，
+//    仅执行 uploadFn → onFileUploaded({ id, ... })
 
 import { useRef, useState } from 'react';
 import { parseResume, uploadResume } from '@/lib/api';
@@ -10,6 +15,9 @@ import type { ParseResponse } from '@/types/resume';
 /** 上传状态机 */
 type UploadStatus = 'idle' | 'uploading' | 'parsing' | 'success' | 'error';
 
+/** 上传函数返回的最小契约：至少包含 id（用于后续解析） */
+type UploadResult = { id: string };
+
 interface UploadZoneProps {
   title: string;
   hint: string;
@@ -17,12 +25,23 @@ interface UploadZoneProps {
   /** 静态模式下的点击回调（onFileUploaded 未传时生效） */
   onClick?: () => void;
   /**
-   * 交互模式回调：上传 + 解析成功后触发，返回结构化结果。
-   * 传入此 prop 即启用拖拽 / 文件选择 / 状态管理。
+   * 交互模式回调：上传（+解析）成功后触发。
+   * 简历模式收到 ParseResponse；知识库模式收到 uploadFn 的返回值。
    */
-  onFileUploaded?: (result: ParseResponse) => void;
+  onFileUploaded?: (result: ParseResponse | UploadResult) => void;
   /** 允许的文件类型，默认 PDF / Word */
   accept?: string;
+  /** 自定义上传函数。未传时使用默认 uploadResume */
+  uploadFn?: (file: File) => Promise<UploadResult>;
+  /**
+   * 自定义解析函数。未传时使用默认 parseResume；
+   * 传 null 则跳过解析步骤（知识库模式）。
+   */
+  parseFn?: ((uploadId: string) => Promise<ParseResponse>) | null;
+  /** 成功提示文案，默认 "已生成版本树节点" */
+  successText?: string;
+  /** 文件类型不匹配时的提示文案 */
+  invalidTypeMessage?: string;
 }
 
 /** 状态 → 展示文案 */
@@ -52,6 +71,10 @@ export default function UploadZone({
   onClick,
   onFileUploaded,
   accept = DEFAULT_ACCEPT,
+  uploadFn,
+  parseFn,
+  successText = '已生成版本树节点',
+  invalidTypeMessage = '仅支持 PDF / Word 文件',
 }: UploadZoneProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [status, setStatus] = useState<UploadStatus>('idle');
@@ -60,21 +83,30 @@ export default function UploadZone({
 
   const interactive = Boolean(onFileUploaded);
   const busy = status === 'uploading' || status === 'parsing';
+  const skipParse = parseFn === null;
 
-  /** 处理单个文件：上传 → 解析 → 回调 */
+  /** 处理单个文件：上传 → [可选解析] → 回调 */
   async function handleFile(file: File) {
     if (!isValidResumeFile(file, accept)) {
       setStatus('error');
-      setErrorMsg('仅支持 PDF / Word 文件');
+      setErrorMsg(invalidTypeMessage);
       return;
     }
 
     setStatus('uploading');
     setErrorMsg(null);
     try {
-      const uploadRes = await uploadResume(file);
+      const upload = uploadFn ? await uploadFn(file) : await uploadResume(file);
+
+      // 知识库模式（parseFn === null）跳过解析
+      if (skipParse) {
+        setStatus('success');
+        onFileUploaded?.(upload);
+        return;
+      }
+
       setStatus('parsing');
-      const parseRes = await parseResume(uploadRes.id);
+      const parseRes = parseFn ? await parseFn(upload.id) : await parseResume(upload.id);
       setStatus('success');
       onFileUploaded?.(parseRes);
     } catch (err) {
@@ -164,7 +196,7 @@ export default function UploadZone({
           ? status === 'error' && errorMsg
             ? errorMsg
             : status === 'success'
-              ? '已生成版本树节点'
+              ? successText
               : hint
           : hint}
       </div>
