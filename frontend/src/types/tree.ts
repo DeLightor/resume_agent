@@ -10,6 +10,8 @@ export interface ResumeNode {
   title: string;
   company?: string | null;
   direction?: string | null;
+  /** 节点结构化简历内容（GET /api/tree/{node_id} 返回时填充） */
+  content_json?: Record<string, unknown> | null;
 }
 
 export interface TreeEdge {
@@ -27,4 +29,19 @@ export interface ApiResponse<T> {
   ok: boolean;
   data: T | null;
   error: { code: string; message: string } | null;
+}
+
+/** POST /api/tree/node 请求体 */
+export interface CreateNodeRequest {
+  parent_id: string;
+  node_type: NodeType;
+  title: string;
+  company?: string;
+  direction?: string;
+}
+
+/** PUT /api/tree/node/{node_id} 请求体 */
+export interface UpdateNodeRequest {
+  title?: string;
+  content_json?: Record<string, unknown>;
 }
