@@ -2,6 +2,11 @@
 
 使用 ``PersistentClient`` 模式，数据落盘到 ``settings.chroma_path``，零运维。
 单例缓存避免重复初始化。
+
+Note:
+    ``settings`` 采用延迟导入（函数内导入），以确保测试期 ``conftest``
+    重置 ``config_module.settings`` 单例后，客户端能读取到最新的配置
+    （避免模块级引用过期导致跨测试数据泄漏）。
 """
 
 from __future__ import annotations
@@ -11,8 +16,6 @@ from typing import Any
 import chromadb
 from chromadb.api import ClientAPI
 from chromadb.api.models import Collection
-
-from resume_agent.config import settings
 
 # 简历切片集合名
 RESUME_COLLECTION = "resume_chunks"
@@ -33,6 +36,8 @@ def get_chroma_client() -> ClientAPI:
     """
     global _client
     if _client is None:
+        from resume_agent.config import settings
+
         settings.chroma_path.mkdir(parents=True, exist_ok=True)
         _client = chromadb.PersistentClient(path=str(settings.chroma_path))
     return _client

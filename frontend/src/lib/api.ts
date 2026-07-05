@@ -13,6 +13,12 @@ import type {
   ResumeListItem,
   UploadResponse,
 } from '@/types/resume';
+import type {
+  KnowledgeDocument,
+  KnowledgeStats,
+  KnowledgeUploadResponse,
+  SearchResponse,
+} from '@/types/knowledge';
 
 const BASE_URL = '/api';
 
@@ -74,6 +80,9 @@ export const api = {
       method: 'PUT',
       body: body ? JSON.stringify(body) : undefined,
     }),
+
+  del: <T>(endpoint: string) =>
+    apiRequest<T>(endpoint, { method: 'DELETE' }),
 };
 
 // ===== 资产冷启动相关 API（参考 design.md 第 3 节）=====
@@ -140,4 +149,61 @@ export async function updateNode(
     `/tree/node/${encodeURIComponent(nodeId)}`,
     updates,
   );
+}
+
+// ===== 知识库 RAG 相关 API（US-3）=====
+
+/**
+ * 上传知识素材文件（PDF/DOCX/MD/TXT 等）。
+ * multipart/form-data，后端保存文件并写入 knowledge_documents 表。
+ */
+export async function uploadKnowledge(
+  file: File,
+): Promise<KnowledgeUploadResponse> {
+  const formData = new FormData();
+  formData.append('file', file);
+  return api.upload<KnowledgeUploadResponse>(
+    '/knowledge/upload',
+    formData,
+  );
+}
+
+/**
+ * 语义检索知识库。
+ * POST /api/knowledge/search，返回 query + 命中片段列表。
+ */
+export async function searchKnowledge(
+  query: string,
+  topK?: number,
+): Promise<SearchResponse> {
+  return api.post<SearchResponse>('/knowledge/search', {
+    query,
+    top_k: topK,
+  });
+}
+
+/**
+ * 获取知识库文档列表。
+ * GET /api/knowledge/documents
+ */
+export async function getKnowledgeDocuments(): Promise<KnowledgeDocument[]> {
+  return api.get<KnowledgeDocument[]>('/knowledge/documents');
+}
+
+/**
+ * 获取知识库统计信息（切片数 / 文档数 / 索引状态）。
+ * GET /api/knowledge/stats
+ */
+export async function getKnowledgeStats(): Promise<KnowledgeStats> {
+  return api.get<KnowledgeStats>('/knowledge/stats');
+}
+
+/**
+ * 删除知识库文档（连同其切片向量）。
+ * DELETE /api/knowledge/documents/{uploadId}
+ */
+export async function deleteKnowledgeDocument(
+  uploadId: string,
+): Promise<void> {
+  await api.del<null>(`/knowledge/documents/${encodeURIComponent(uploadId)}`);
 }
