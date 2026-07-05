@@ -11,7 +11,19 @@ import GapReportView from '@/components/gap/GapReportView';
 import GenerateView from '@/components/generate/GenerateView';
 import type { JDAnalysisResult } from '@/types/jd';
 
-export default function RightPanel() {
+interface RightPanelProps {
+  /** US-8：AI 生成的简历数据（用于联动，由 MainLayout 提升） */
+  resumeData?: Record<string, unknown> | null;
+  /** US-8：AI 生成成功回调，把结果传回 MainLayout */
+  onResumeGenerated?: (data: Record<string, unknown>) => void;
+  /** US-8：当前选中的模板 id，用于导出 PDF */
+  templateId?: string;
+}
+
+export default function RightPanel({
+  onResumeGenerated,
+  templateId,
+}: RightPanelProps) {
   // JD 分析结果（US-4）：null 时显示上传区，非 null 时显示 JDCard
   const [jdResult, setJdResult] = useState<JDAnalysisResult | null>(null);
 
@@ -101,7 +113,11 @@ export default function RightPanel() {
           </svg>
           AI 简历生成
         </div>
-        <GenerateView structuredJD={(jdResult?.structured ?? null) as Record<string, unknown> | null} />
+        <GenerateView
+          structuredJD={(jdResult?.structured ?? null) as Record<string, unknown> | null}
+          onResumeGenerated={onResumeGenerated}
+          templateId={templateId}
+        />
       </section>
     </aside>
   );

@@ -22,6 +22,7 @@ import type {
 import type { JDAnalysisResult } from '@/types/jd';
 import type { GapReport } from '@/types/gap';
 import type { GenerateResult } from '@/types/generate';
+import type { TemplateInfo } from '@/types/template';
 
 const BASE_URL = '/api';
 
@@ -266,6 +267,7 @@ export async function exportResumePDF(
   resumeData: Record<string, unknown>,
   jobTitle?: string,
   company?: string,
+  templateId?: string,
 ): Promise<Blob> {
   const response = await fetch(`${BASE_URL}/export/pdf`, {
     method: 'POST',
@@ -274,6 +276,7 @@ export async function exportResumePDF(
       resume_data: resumeData,
       job_title: jobTitle ?? '',
       company: company ?? '',
+      template_id: templateId ?? 'modern',
     }),
   });
 
@@ -289,4 +292,15 @@ export async function exportResumePDF(
   }
 
   return response.blob();
+}
+
+// ===== 模板系统 API（US-8）=====
+
+/**
+ * 获取模板列表。
+ * GET /api/templates，返回内置模板（modern / classic / tech）。
+ * 每项包含 id / name / description / theme_color。
+ */
+export async function getTemplates(): Promise<TemplateInfo[]> {
+  return api.get<TemplateInfo[]>('/templates');
 }

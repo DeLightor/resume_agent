@@ -15,6 +15,7 @@ from resume_agent.api import (
     jd,
     knowledge,
     resumes,
+    templates,
     tree,
 )
 
@@ -31,6 +32,7 @@ api_router.include_router(jd.router)
 api_router.include_router(gap.router)
 api_router.include_router(generate.router)
 api_router.include_router(export.router)
+api_router.include_router(templates.router)
 
 
 __all__ = ["api_router"]

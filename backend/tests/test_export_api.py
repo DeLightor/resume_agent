@@ -220,3 +220,122 @@ def test_export_pdf_xml_special_chars() -> None:
 
     assert response.status_code == 200
     assert response.content[:4] == b"%PDF"
+
+
+def _extract_pdf_text(pdf_bytes: bytes) -> str:
+    """用 pymupdf 从 PDF 字节流提取全部文本。"""
+    import io as _io
+
+    import fitz  # pymupdf
+
+    doc = fitz.open(stream=_io.BytesIO(pdf_bytes), filetype="pdf")
+    text = ""
+    for page in doc:
+        text += page.get_text()
+    doc.close()
+    return text
+
+
+def test_export_pdf_classic_template() -> None:
+    """classic 模板导出 PDF，验证 magic bytes + 中文可提取。"""
+    from resume_agent.main import app
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/export/pdf",
+        json={
+            "resume_data": _make_resume_data(),
+            "job_title": "推荐算法工程师",
+            "template_id": "classic",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/pdf"
+    assert response.content[:4] == b"%PDF"
+
+    # 验证中文内容可提取（ATS 友好）
+    text = _extract_pdf_text(response.content)
+    assert "张三" in text
+    assert "腾讯" in text
+    assert "推荐算法工程师" in text
+    # classic 色块标题条中的段落标题应可提取
+    assert "工作经历" in text
+    assert "技能" in text
+
+
+def test_export_pdf_tech_template() -> None:
+    """tech 模板导出 PDF，验证 magic bytes + 中文可提取。"""
+    from resume_agent.main import app
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/export/pdf",
+        json={
+            "resume_data": _make_resume_data(),
+            "job_title": "推荐算法工程师",
+            "template_id": "tech",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/pdf"
+    assert response.content[:4] == b"%PDF"
+
+    # 验证中文内容可提取
+    text = _extract_pdf_text(response.content)
+    assert "张三" in text
+    assert "腾讯" in text
+    # tech 模板技能标签横排，技能名称仍应可提取
+    assert "Python" in text
+    assert "PyTorch" in text
+
+
+def test_export_pdf_unknown_template_falls_back() -> None:
+    """未知 template_id 回退到 modern，不报错，验证 magic bytes。"""
+    from resume_agent.main import app
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/export/pdf",
+        json={
+            "resume_data": _make_resume_data(),
+            "template_id": "nonexistent",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/pdf"
+    assert response.content[:4] == b"%PDF"
+
+    # 回退到 modern 后中文仍可提取
+    text = _extract_pdf_text(response.content)
+    assert "张三" in text
+
+
+def test_export_pdf_different_templates_different_size() -> None:
+    """同一数据分别导出 modern/classic/tech，PDF 字节数不完全相同。"""
+    from resume_agent.main import app
+
+    client = TestClient(app)
+    data = _make_resume_data()
+
+    sizes = {}
+    for tpl_id in ("modern", "classic", "tech"):
+        response = client.post(
+            "/api/export/pdf",
+            json={
+                "resume_data": data,
+                "job_title": "推荐算法工程师",
+                "template_id": tpl_id,
+            },
+        )
+        assert response.status_code == 200
+        assert response.content[:4] == b"%PDF"
+        sizes[tpl_id] = len(response.content)
+
+    # 三个模板生成的 PDF 字节数应至少有两个不同（验证模板确实有差异）
+    unique_sizes = set(sizes.values())
+    assert len(unique_sizes) >= 2, (
+        f"三个模板 PDF 字节数完全相同，模板差异未生效: {sizes}"
+    )

@@ -9,6 +9,10 @@ import type { GenerateResult } from '@/types/generate';
 interface GenerateViewProps {
   structuredJD: Record<string, unknown> | null;
   gapReport?: Record<string, unknown> | null;
+  /** US-8：生成成功后回调，把结果传给 MainLayout 供中栏预览 */
+  onResumeGenerated?: (data: Record<string, unknown>) => void;
+  /** US-8：当前选中的模板 id，用于导出 PDF */
+  templateId?: string;
 }
 
 type Status = 'idle' | 'loading' | 'done' | 'error';
@@ -22,7 +26,12 @@ const SECTIONS: { key: Section; label: string; icon: string }[] = [
 
 const LOADING_STEPS = ['检索知识库中...', '审核内容中...', '撰写段落中...'];
 
-export default function GenerateView({ structuredJD, gapReport }: GenerateViewProps) {
+export default function GenerateView({
+  structuredJD,
+  gapReport,
+  onResumeGenerated,
+  templateId,
+}: GenerateViewProps) {
   const [status, setStatus] = useState<Status>('idle');
   const [section, setSection] = useState<Section>('experience');
   const [result, setResult] = useState<GenerateResult | null>(null);
@@ -46,6 +55,8 @@ export default function GenerateView({ structuredJD, gapReport }: GenerateViewPr
       const res = await generateResume(structuredJD, section, gapReport);
       setResult(res);
       setStatus('done');
+      // US-8：把生成结果传给 MainLayout，供中栏 ResumePreview 实时预览
+      onResumeGenerated?.(res.content);
     } catch (err) {
       setStatus('error');
       setErrorMsg(err instanceof Error ? err.message : '生成失败');
@@ -73,7 +84,7 @@ export default function GenerateView({ structuredJD, gapReport }: GenerateViewPr
       const company =
         (structuredJD as Record<string, unknown>)?.company as string ?? '';
 
-      const blob = await exportResumePDF(resumeData, jobTitle, company);
+      const blob = await exportResumePDF(resumeData, jobTitle, company, templateId);
 
       // 触发浏览器下载
       const url = URL.createObjectURL(blob);

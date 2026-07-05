@@ -18,6 +18,12 @@ export default function MainLayout() {
   const [knowledgeRefreshKey, setKnowledgeRefreshKey] = useState(0);
   // 中栏当前视图
   const [activeView, setActiveView] = useState<ActiveView>('version-tree');
+  // US-8：AI 生成的简历数据（右栏 GenerateView 产出 → 中栏 ResumePreview 展示）
+  const [generatedResumeData, setGeneratedResumeData] = useState<
+    Record<string, unknown> | null
+  >(null);
+  // US-8：当前选中的模板 id（默认 modern）
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>('modern');
 
   const handleTreeRefresh = useCallback(() => {
     setTreeRefreshKey((k) => k + 1);
@@ -29,6 +35,19 @@ export default function MainLayout() {
 
   const handleNavigate = useCallback((view: ActiveView) => {
     setActiveView(view);
+  }, []);
+
+  // AI 生成成功后写入 generatedResumeData，供中栏预览
+  const handleResumeGenerated = useCallback(
+    (data: Record<string, unknown>) => {
+      setGeneratedResumeData(data);
+    },
+    [],
+  );
+
+  // 模板切换
+  const handleTemplateSelect = useCallback((id: string) => {
+    setSelectedTemplateId(id);
   }, []);
 
   return (
@@ -48,10 +67,17 @@ export default function MainLayout() {
         onTreeRefresh={handleTreeRefresh}
         knowledgeRefreshKey={knowledgeRefreshKey}
         onKnowledgeRefresh={handleKnowledgeRefresh}
+        resumeData={generatedResumeData}
+        templateId={selectedTemplateId}
+        onTemplateSelect={handleTemplateSelect}
       />
       {/* 右栏始终可见：JD 截图分析 / Gap 报告 / AI 导师均在此栏，
           无需随导航项切换（"职位截图分析"等导航仅影响中栏视图） */}
-      <RightPanel />
+      <RightPanel
+        resumeData={generatedResumeData}
+        onResumeGenerated={handleResumeGenerated}
+        templateId={selectedTemplateId}
+      />
     </div>
   );
 }
