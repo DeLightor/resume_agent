@@ -21,6 +21,7 @@ import type {
 } from '@/types/knowledge';
 import type { JDAnalysisResult } from '@/types/jd';
 import type { GapReport } from '@/types/gap';
+import type { GenerateResult } from '@/types/generate';
 
 const BASE_URL = '/api';
 
@@ -232,4 +233,22 @@ export async function generateGapReport(
   structuredJD: Record<string, unknown>,
 ): Promise<GapReport> {
   return api.post<GapReport>('/gap-report', { structured_jd: structuredJD });
+}
+
+// ===== AI 生成 API（US-6）=====
+
+/**
+ * AI 生成简历段落。
+ * POST /api/generate，3 步工作流：检索 → 反思 → 撰写。
+ */
+export async function generateResume(
+  structuredJD: Record<string, unknown>,
+  section: string,
+  gapReport?: Record<string, unknown> | null,
+): Promise<GenerateResult> {
+  return api.post<GenerateResult>('/generate', {
+    structured_jd: structuredJD,
+    section,
+    gap_report: gapReport ?? null,
+  });
 }

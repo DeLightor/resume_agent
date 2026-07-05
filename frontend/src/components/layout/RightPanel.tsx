@@ -8,6 +8,7 @@ import { useState } from 'react';
 import JDUploadZone from '@/components/jd/JDUploadZone';
 import JDCard from '@/components/jd/JDCard';
 import GapReportView from '@/components/gap/GapReportView';
+import GenerateView from '@/components/generate/GenerateView';
 import type { JDAnalysisResult } from '@/types/jd';
 
 export default function RightPanel() {
@@ -82,7 +83,7 @@ export default function RightPanel() {
         <GapReportView structuredJD={(jdResult?.structured ?? null) as Record<string, unknown> | null} />
       </section>
 
-      {/* Section 3: AI 生成预览区（空状态，US-6 实现） */}
+      {/* Section 3: AI 生成预览区 */}
       <section className="p-4">
         <div className="flex items-center gap-2 mb-3 text-sm font-semibold text-text-primary">
           <svg
@@ -98,14 +99,9 @@ export default function RightPanel() {
             <circle cx="5" cy="12" r="1" fill="currentColor" />
             <circle cx="11" cy="12" r="1" fill="currentColor" />
           </svg>
-          AI 求职导师
+          AI 简历生成
         </div>
-
-        <div className="bg-bg-tertiary rounded-lg p-4 border border-border-subtle">
-          <div className="text-xs text-text-muted text-center">
-            Gap 报告生成后，可一键生成专属简历（US-6）
-          </div>
-        </div>
+        <GenerateView structuredJD={(jdResult?.structured ?? null) as Record<string, unknown> | null} />
       </section>
     </aside>
   );
