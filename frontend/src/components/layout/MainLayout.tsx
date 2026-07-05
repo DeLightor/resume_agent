@@ -21,7 +21,10 @@ export default function MainLayout() {
       style={{ height: 'calc(100vh - var(--header-height))' }}
     >
       <LeftPanel onTreeRefresh={handleTreeRefresh} />
-      <CenterPanel treeRefreshKey={treeRefreshKey} />
+      <CenterPanel
+        treeRefreshKey={treeRefreshKey}
+        onTreeRefresh={handleTreeRefresh}
+      />
       <RightPanel />
     </div>
   );

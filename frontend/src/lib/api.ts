@@ -1,7 +1,13 @@
 // frontend/src/lib/api.ts
 // API 调用封装（fetch wrapper），统一处理 ok/data/error 格式
 
-import type { ApiResponse, TreeData } from '@/types/tree';
+import type {
+  ApiResponse,
+  CreateNodeRequest,
+  ResumeNode,
+  TreeData,
+  UpdateNodeRequest,
+} from '@/types/tree';
 import type {
   ParseResponse,
   ResumeListItem,
@@ -62,6 +68,12 @@ export const api = {
       body: formData,
       // 不设置 Content-Type，让浏览器自动设置 multipart boundary
     }),
+
+  put: <T>(endpoint: string, body?: unknown) =>
+    apiRequest<T>(endpoint, {
+      method: 'PUT',
+      body: body ? JSON.stringify(body) : undefined,
+    }),
 };
 
 // ===== 资产冷启动相关 API（参考 design.md 第 3 节）=====
@@ -96,4 +108,36 @@ export async function getTree(): Promise<TreeData> {
  */
 export async function getResumeList(): Promise<ResumeListItem[]> {
   return api.get<ResumeListItem[]>('/resumes/list');
+}
+
+// ===== 版本树节点管理 API（US-2）=====
+
+/**
+ * 获取单个节点详情（含 content_json）。
+ * GET /api/tree/{node_id}
+ */
+export async function getNode(nodeId: string): Promise<ResumeNode> {
+  return api.get<ResumeNode>(`/tree/${encodeURIComponent(nodeId)}`);
+}
+
+/**
+ * 新建节点（branch / company），写入 resume_versions 表。
+ * POST /api/tree/node
+ */
+export async function createNode(req: CreateNodeRequest): Promise<ResumeNode> {
+  return api.post<ResumeNode>('/tree/node', req);
+}
+
+/**
+ * 更新节点 title / content_json。
+ * PUT /api/tree/node/{node_id}
+ */
+export async function updateNode(
+  nodeId: string,
+  updates: UpdateNodeRequest,
+): Promise<ResumeNode> {
+  return api.put<ResumeNode>(
+    `/tree/node/${encodeURIComponent(nodeId)}`,
+    updates,
+  );
 }

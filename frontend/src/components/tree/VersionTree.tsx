@@ -25,10 +25,10 @@ const nodeTypes = {
   company: CompanyNode,
 };
 
-/** 列布局 x 坐标：master → branch → company */
-const X_MASTER = 80;
-const X_BRANCH = 340;
-const X_COMPANY = 640;
+/** 列布局 x 坐标：master → branch → company（右移避开 React Flow 控件） */
+const X_MASTER = 180;
+const X_BRANCH = 440;
+const X_COMPANY = 740;
 
 /** 各层垂直间距 */
 const BRANCH_GAP = 180;
@@ -37,6 +37,10 @@ const COMPANY_GAP = 110;
 interface VersionTreeProps {
   /** 变化时触发重新拉取版本树（由上传成功后递增） */
   refreshKey?: number;
+  /** 节点被选中时回调（传递对应的 ResumeNode） */
+  onNodeSelect?: (node: ResumeNode) => void;
+  /** 版本树加载完成时回调（供父层回溯路径 / 父选项） */
+  onTreeLoad?: (tree: TreeData) => void;
 }
 
 /** 根据节点类型映射为 ReactFlow Node data */
@@ -111,7 +115,11 @@ function layoutTree(tree: TreeData): { nodes: Node[]; edges: Edge[] } {
   return { nodes, edges };
 }
 
-export default function VersionTree({ refreshKey = 0 }: VersionTreeProps) {
+export default function VersionTree({
+  refreshKey = 0,
+  onNodeSelect,
+  onTreeLoad,
+}: VersionTreeProps) {
   const [tree, setTree] = useState<TreeData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -128,6 +136,7 @@ export default function VersionTree({ refreshKey = 0 }: VersionTreeProps) {
         if (!cancelled) {
           setTree(data);
           setLoading(false);
+          onTreeLoad?.(data);
         }
       })
       .catch((err: unknown) => {
@@ -139,7 +148,7 @@ export default function VersionTree({ refreshKey = 0 }: VersionTreeProps) {
     return () => {
       cancelled = true;
     };
-  }, [refreshKey]);
+  }, [refreshKey, onTreeLoad]);
 
   // 当 tree 数据变化时，重新计算布局并更新 nodes/edges
   useEffect(() => {
@@ -186,6 +195,11 @@ export default function VersionTree({ refreshKey = 0 }: VersionTreeProps) {
         edges={edges}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
+        onNodeClick={(_event, flowNode) => {
+          if (!onNodeSelect || !tree) return;
+          const resumeNode = tree.nodes.find((n) => n.node_id === flowNode.id);
+          if (resumeNode) onNodeSelect(resumeNode);
+        }}
         nodeTypes={nodeTypes}
         nodesDraggable
         fitView
@@ -194,6 +208,7 @@ export default function VersionTree({ refreshKey = 0 }: VersionTreeProps) {
       >
         <Background color="#e2e8f0" gap={30} size={1} />
         <Controls
+          position="bottom-right"
           style={{
             backgroundColor: '#ffffff',
             border: '1px solid #e2e8f0',
