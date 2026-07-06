@@ -22,6 +22,7 @@ import type {
 import type { JDAnalysisResult } from '@/types/jd';
 import type { GapReport } from '@/types/gap';
 import type { GenerateResult } from '@/types/generate';
+import type { SuggestResult } from '@/types/suggest';
 import type { TemplateInfo } from '@/types/template';
 
 const BASE_URL = '/api';
@@ -303,4 +304,24 @@ export async function exportResumePDF(
  */
 export async function getTemplates(): Promise<TemplateInfo[]> {
   return api.get<TemplateInfo[]>('/templates');
+}
+
+// ===== AI 智能补全 API（US-9）=====
+
+/**
+ * 获取 AI 智能补全建议。
+ * POST /api/suggest，传入 JD 结构化数据 + 当前段落内容，返回可采纳的补充建议。
+ */
+export async function generateSuggestions(
+  structuredJD: Record<string, unknown>,
+  section: string,
+  content: Record<string, unknown>,
+  gapReport?: Record<string, unknown> | null,
+): Promise<SuggestResult> {
+  return api.post<SuggestResult>('/suggest', {
+    structured_jd: structuredJD,
+    section,
+    content,
+    gap_report: gapReport ?? null,
+  });
 }
