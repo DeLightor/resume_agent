@@ -24,6 +24,7 @@ import type { GapReport } from '@/types/gap';
 import type { GenerateResult } from '@/types/generate';
 import type { SuggestResult } from '@/types/suggest';
 import type { TemplateInfo } from '@/types/template';
+import type { DiffResult } from '@/types/diff';
 
 const BASE_URL = '/api';
 
@@ -324,4 +325,25 @@ export async function generateSuggestions(
     content,
     gap_report: gapReport ?? null,
   });
+}
+
+// ===== 版本 Diff API（US-10）=====
+
+/** 对比两个节点的 content_json */
+export async function getNodeDiff(
+  nodeAId: string,
+  nodeBId: string,
+): Promise<DiffResult> {
+  return api.post<DiffResult>('/diff', {
+    node_a_id: nodeAId,
+    node_b_id: nodeBId,
+  });
+}
+
+/** 更新节点的 content_json（保存简历内容到节点） */
+export async function updateNodeContent(
+  nodeId: string,
+  content: Record<string, unknown>,
+): Promise<void> {
+  await api.put(`/tree/node/${nodeId}`, { content_json: content });
 }

@@ -4,7 +4,7 @@
 // 修复：切换段落不清空已有结果 + 支持单项选择加入预览
 
 import { useEffect, useState, useCallback } from 'react';
-import { exportResumePDF, generateResume, generateSuggestions } from '@/lib/api';
+import { exportResumePDF, generateResume, generateSuggestions, updateNodeContent } from '@/lib/api';
 import type {
   GeneratedExperience,
   GeneratedProject,
@@ -13,6 +13,7 @@ import type {
   GenerateResult,
 } from '@/types/generate';
 import type { Suggestion } from '@/types/suggest';
+import type { ResumeNode } from '@/types/tree';
 import SuggestionCards from './SuggestionCards';
 
 interface GenerateViewProps {
@@ -22,6 +23,8 @@ interface GenerateViewProps {
   onResumeGenerated?: (data: Record<string, unknown>) => void;
   /** US-8：当前选中的模板 id，用于导出 PDF */
   templateId?: string;
+  /** US-10：版本树节点列表，用于"保存到节点" */
+  treeNodes?: ResumeNode[];
 }
 
 type Status = 'idle' | 'loading' | 'done' | 'error';
@@ -69,6 +72,7 @@ export default function GenerateView({
   gapReport,
   onResumeGenerated,
   templateId,
+  treeNodes,
 }: GenerateViewProps) {
   const [status, setStatus] = useState<Status>('idle');
   const [section, setSection] = useState<Section>('experience');
@@ -91,6 +95,11 @@ export default function GenerateView({
   const [suggestLoadedBySection, setSuggestLoadedBySection] = useState<
     Record<string, boolean>
   >({});
+  // US-10：保存到节点的状态
+  const [savingToNode, setSavingToNode] = useState(false);
+  const [showSaveDialog, setShowSaveDialog] = useState(false);
+  const [saveTargetNode, setSaveTargetNode] = useState<string>('');
+  const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
 
   // 当前段落的结果（从缓存派生）
   const result = resultsBySection[section] ?? null;
@@ -281,6 +290,26 @@ export default function GenerateView({
     }
   }
 
+  /** US-10：保存合并后的简历内容到版本树节点 */
+  async function handleSaveToNode() {
+    if (savingToNode || !saveTargetNode) return;
+    const merged = mergeAllSections(resultsBySection, excludedBySection);
+    if (Object.keys(merged).length === 0) return;
+
+    setSavingToNode(true);
+    setSaveSuccess(null);
+    try {
+      await updateNodeContent(saveTargetNode, merged);
+      setSaveSuccess(`已保存到节点: ${saveTargetNode}`);
+      setShowSaveDialog(false);
+      setTimeout(() => setSaveSuccess(null), 3000);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : '保存失败');
+    } finally {
+      setSavingToNode(false);
+    }
+  }
+
   // 无 JD 数据
   if (!structuredJD) {
     return (
@@ -435,7 +464,48 @@ export default function GenerateView({
             />
           )}
 
-          {/* 导出 + 重新生成按钮 */}
+          {/* 保存成功提示 */}
+          {saveSuccess && (
+            <div className="text-xs text-success bg-[rgba(34,197,94,0.08)] border border-[rgba(34,197,94,0.2)] rounded-md px-2 py-1">
+              {saveSuccess}
+            </div>
+          )}
+
+          {/* 保存到节点对话框 */}
+          {showSaveDialog && (
+            <div className="border border-border-default rounded-md p-2 space-y-2 bg-bg-elevated">
+              <div className="text-xs font-medium text-text-primary">选择目标节点</div>
+              <select
+                value={saveTargetNode}
+                onChange={(e) => setSaveTargetNode(e.target.value)}
+                className="w-full text-xs px-2 py-1 rounded border border-border-default bg-bg-primary text-text-primary"
+              >
+                <option value="">请选择节点...</option>
+                {(treeNodes ?? []).map((n) => (
+                  <option key={n.node_id} value={n.node_id}>
+                    {n.title} ({n.node_type})
+                  </option>
+                ))}
+              </select>
+              <div className="flex gap-2">
+                <button
+                  onClick={handleSaveToNode}
+                  disabled={!saveTargetNode || savingToNode}
+                  className="flex-1 text-xs px-2 py-1 rounded bg-brand-primary text-white cursor-pointer hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {savingToNode ? '保存中...' : '确认保存'}
+                </button>
+                <button
+                  onClick={() => { setShowSaveDialog(false); setSaveTargetNode(''); }}
+                  className="flex-1 text-xs px-2 py-1 rounded border border-border-default text-text-secondary cursor-pointer hover:border-brand-primary"
+                >
+                  取消
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* 导出 + 保存 + 重新生成按钮 */}
           <div className="flex gap-2">
             <button
               onClick={handleExportPDF}
@@ -443,6 +513,13 @@ export default function GenerateView({
               className="flex-1 text-xs px-3 py-1.5 rounded-md bg-brand-primary text-white font-medium cursor-pointer hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {exporting ? '导出中...' : '导出 PDF'}
+            </button>
+            <button
+              onClick={() => setShowSaveDialog(!showSaveDialog)}
+              disabled={savingToNode}
+              className="flex-1 text-xs px-3 py-1.5 rounded-md border border-border-default text-text-secondary bg-bg-elevated cursor-pointer hover:border-brand-primary hover:text-brand-primary transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              保存到节点
             </button>
             <button
               onClick={handleGenerate}

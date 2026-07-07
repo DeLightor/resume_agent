@@ -12,6 +12,7 @@ import CreateNodeModal from '@/components/tree/CreateNodeModal';
 import KnowledgeView from '@/components/knowledge/KnowledgeView';
 import TemplateSelector from '@/components/template/TemplateSelector';
 import ResumePreview from '@/components/template/ResumePreview';
+import DiffView from '@/components/diff/DiffView';
 import { getTemplates } from '@/lib/api';
 import type { ResumeNode, TreeData } from '@/types/tree';
 import type { ActiveView } from '@/types/knowledge';
@@ -43,6 +44,8 @@ interface CenterPanelProps {
   templateId?: string;
   /** US-8：切换模板回调 */
   onTemplateSelect?: (id: string) => void;
+  /** US-10：树数据加载后回灌节点列表给 MainLayout（供 Diff 选择器和保存功能使用） */
+  onTreeNodesUpdate?: (nodes: ResumeNode[]) => void;
 }
 
 /**
@@ -72,6 +75,7 @@ export default function CenterPanel({
   resumeData = null,
   templateId = 'modern',
   onTemplateSelect,
+  onTreeNodesUpdate,
 }: CenterPanelProps) {
   const [activeTab, setActiveTab] = useState<string>('版本树');
   const [selectedNode, setSelectedNode] = useState<ResumeNode | null>(null);
@@ -104,7 +108,8 @@ export default function CenterPanel({
 
   const handleTreeLoad = useCallback((data: TreeData) => {
     setTree(data);
-  }, []);
+    onTreeNodesUpdate?.(data.nodes);
+  }, [onTreeNodesUpdate]);
 
   const handleCreated = useCallback(() => {
     setShowCreateModal(false);
@@ -170,9 +175,9 @@ export default function CenterPanel({
           </div>
         </div>
       ) : activeTab === 'Diff 对比' ? (
-        // US-10：Diff 对比（占位，待实现）
-        <div className="flex-1 flex items-center justify-center text-text-muted text-sm">
-          Diff 对比功能即将上线（US-10）
+        // US-10：版本 Diff 对比视图
+        <div className="flex-1 overflow-y-auto p-4">
+          <DiffView nodes={tree?.nodes ?? []} />
         </div>
       ) : (
         <>

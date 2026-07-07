@@ -8,6 +8,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from resume_agent.api import (
+    diff,
     export,
     gap,
     generate,
@@ -35,6 +36,7 @@ api_router.include_router(generate.router)
 api_router.include_router(suggest.router)
 api_router.include_router(export.router)
 api_router.include_router(templates.router)
+api_router.include_router(diff.router)
 
 
 __all__ = ["api_router"]
