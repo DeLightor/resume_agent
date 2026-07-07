@@ -9,11 +9,15 @@ OpenAI / DeepSeek / Moonshot / 本地 Ollama / Anthropic OpenAI-compatible 端�
 
 from __future__ import annotations
 
-from typing import Any
+import json
+import logging
+from typing import Any, Callable
 
 from openai import AsyncOpenAI
 
 from resume_agent.config import settings
+
+logger = logging.getLogger("resume_agent")
 
 
 class LLMClient:
@@ -107,6 +111,107 @@ class LLMClient:
         # openai SDK 返回的 choice.message.content 可能为 None，做兜底
         content = response.choices[0].message.content
         return content if content is not None else ""
+
+    async def chat_with_tools(
+        self,
+        system_prompt: str,
+        user_content: str,
+        tools: list[dict[str, Any]],
+        tool_executor: Callable[[str, str], str],
+        response_format_json: bool = False,
+        max_tool_rounds: int = 5,
+    ) -> str:
+        """发送带工具调用能力的 chat completion 请求。
+
+        自动处理 tool-use 循环：
+        1. 发送请求，附带可用工具定义。
+        2. 如果 LLM 返回 ``tool_calls``，执行对应工具。
+        3. 将工具结果回传给 LLM。
+        4. 重复直到 LLM 返回最终文本或达到最大轮次。
+
+        Args:
+            system_prompt: system 角色提示词。
+            user_content: user 角色消息内容。
+            tools: OpenAI 格式的工具定义列表。
+            tool_executor: 回调函数 ``(tool_name, arguments_json) -> result_string``。
+            response_format_json: 最终响应是否要求 JSON 格式。
+            max_tool_rounds: 最大工具调用轮次。
+
+        Returns:
+            最终助手消息的文本内容。
+
+        Raises:
+            RuntimeError: ``api_key`` 为空时抛出。
+        """
+        if not self.api_key:
+            raise RuntimeError("LLM not configured")
+
+        client = self._build_client()
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ]
+
+        for round_idx in range(max_tool_rounds):
+            kwargs: dict[str, Any] = {
+                "model": self.model,
+                "messages": messages,
+                "tools": tools,
+            }
+            if response_format_json:
+                kwargs["response_format"] = {"type": "json_object"}
+
+            response = await client.chat.completions.create(**kwargs)
+            message = response.choices[0].message
+
+            # 没有 tool_calls = 最终响应
+            if not message.tool_calls:
+                return message.content or ""
+
+            # 将 assistant 消息（含 tool_calls）加入对话
+            assistant_msg: dict[str, Any] = {
+                "role": "assistant",
+                "content": message.content or "",
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments,
+                        },
+                    }
+                    for tc in message.tool_calls
+                ],
+            }
+            messages.append(assistant_msg)
+
+            # 执行每个工具调用，将结果加入对话
+            for tc in message.tool_calls:
+                tool_name = tc.function.name
+                arguments = tc.function.arguments
+                try:
+                    result = tool_executor(tool_name, arguments)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("工具执行失败 (%s): %s", tool_name, exc)
+                    result = json.dumps(
+                        {"error": str(exc)}, ensure_ascii=False
+                    )
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": result,
+                })
+
+        # 超过最大轮次，强制最终响应（不带 tools）
+        logger.warning(
+            "工具调用达到最大轮次 (%d)，强制生成最终响应", max_tool_rounds
+        )
+        kwargs = {"model": self.model, "messages": messages}
+        if response_format_json:
+            kwargs["response_format"] = {"type": "json_object"}
+        response = await client.chat.completions.create(**kwargs)
+        return response.choices[0].message.content or ""
 
 
 def get_default_client() -> LLMClient:
