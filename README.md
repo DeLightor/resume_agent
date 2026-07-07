@@ -65,6 +65,14 @@ MINERU_API_BASE=https://mineru.net
 
 MinerU 提供云端文档解析 API，用于 JD 截图 OCR。有免费额度，无需自建部署。
 
+### Tavily 配置（AI 导师学习建议，可选）
+
+```bash
+TAVILY_API_KEY=tvly-dev-xxxxxxxx     # 在 https://tavily.com 获取
+```
+
+Tavily 提供 Web 搜索 API，用于 AI 导师为技能缺口推荐真实有效的学习资源链接。有免费额度（1000 次/月）。未配置时降级为 LLM 训练数据生成的链接。
+
 ### Embedding 配置
 
 知识库向量检索使用 Chroma 内置的 `all-MiniLM-L6-v2` 本地模型，无需额外配置 API Key，开箱即用。
@@ -85,12 +93,15 @@ FILES_ROOT=~/.resume-agent/files
 | 前端 | React 18 + Vite + TypeScript + Tailwind CSS v4 + React Flow v12 |
 | 后端 | Python 3.12 + FastAPI + uvicorn |
 | 数据库 | SQLite（元数据）+ Chroma（向量库，嵌入式，all-MiniLM-L6-v2） |
-| LLM | DeepSeek / OpenAI 兼容协议（结构化提取、反思审核、简历生成） |
+| LLM | DeepSeek / OpenAI 兼容协议（结构化提取、反思审核、简历生成、导师建议） |
 | OCR | MinerU 云端 API（JD 截图解析，支持 PDF/图片/DOCX） |
-| PDF | reportlab（ATS 友好，文本可选可解析，CJK 字体支持） |
+| Web 搜索 | Tavily API（AI 导师学习资源搜索，真实 URL） |
+| PDF | reportlab（ATS 友好，文本可选可解析，CJK 字体支持，多模板） |
 | 部署 | Docker Compose 单容器 |
 
 ## 功能概览
+
+### v1.0 MVP 核心功能
 
 | 功能 | 说明 |
 |------|------|
@@ -101,24 +112,34 @@ FILES_ROOT=~/.resume-agent/files
 | AI 简历生成 | 检索 → 反思审核 → 撰写润色（3 步工作流，不依赖 LangGraph） |
 | PDF 导出 | ATS 友好模板，文本可选可解析，支持中文 |
 
+### v1.1 增强功能
+
+| 功能 | 说明 |
+|------|------|
+| 简历预览与模板 | 3 套内置模板（modern/classic/tech），实时预览，模板选择器 |
+| AI 智能补全 | Gap 报告驱动，建议卡片，逐条采纳，分段缓存 |
+| 版本 Diff 对比 | 字段级 diff（experience/projects/skills），结构化卡片渲染，新增/删除/修改高亮 |
+| AI 导师学习建议 | Tavily Web 搜索 + 并行 LLM 调用，学习路径（概念→实践→验证）+ 真实资源链接 + 状态标记 |
+
 ## 项目结构
 
 ```
 resume-agent/
 ├── backend/              # Python 后端
 │   ├── src/resume_agent/
-│   │   ├── api/          # FastAPI 路由（tree/knowledge/jd/gap_report/generate/export）
+│   │   ├── api/          # FastAPI 路由（tree/knowledge/jd/gap_report/generate/export/diff/suggest/tutor/templates）
 │   │   ├── db/           # SQLite + 建表脚本
-│   │   ├── rag/           # Chroma 向量库 + 文本分块
+│   │   ├── rag/          # Chroma 向量库 + 文本分块
 │   │   ├── parsers/      # MinerU 文档解析客户端
-│   │   ├── llm/           # 统一 LLM 客户端（OpenAI/DeepSeek）
-│   │   ├── export/       # PDF 生成（reportlab）
+│   │   ├── llm/          # 统一 LLM 客户端（OpenAI/DeepSeek，支持 tool use）
+│   │   ├── tools/        # 外部工具（Tavily Web 搜索）
+│   │   ├── export/       # PDF 生成（reportlab，多模板）
 │   │   ├── config.py     # 环境变量配置
 │   │   └── main.py       # FastAPI 入口
-│   └── tests/            # pytest 测试（150+ tests）
+│   └── tests/            # pytest 测试（170+ tests）
 ├── frontend/             # React 前端
 │   ├── src/
-│   │   ├── components/   # 组件（layout/tree/knowledge/jd/gap/generate）
+│   │   ├── components/   # 组件（layout/tree/knowledge/jd/gap/generate/diff/tutor/template）
 │   │   ├── lib/          # API 封装
 │   │   ├── styles/       # 设计令牌 + Tailwind
 │   │   └── types/        # TypeScript 类型
