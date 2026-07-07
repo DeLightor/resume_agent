@@ -1,6 +1,7 @@
 // frontend/src/components/tree/NodeDetailPanel.tsx
-// 节点详情浮层：中栏画布右上角，显示选中节点的类型/标题/方向或公司/内容预览
+// 节点详情浮层：中栏画布右上角，显示选中节点的类型/标题/方向或公司/格式化简历预览
 
+import ResumePreview from '@/components/template/ResumePreview';
 import type { NodeType, ResumeNode } from '@/types/tree';
 
 interface NodeDetailPanelProps {
@@ -28,8 +29,8 @@ const TYPE_DOT_CLASS: Record<NodeType, string> = {
   company: 'bg-node-company',
 };
 
-/** content_json 预览最多展示的行数 */
-const PREVIEW_MAX_LINES = 8;
+/** 详情面板使用的默认模板 id */
+const DEFAULT_TEMPLATE = 'modern';
 
 export default function NodeDetailPanel({ node, onClose }: NodeDetailPanelProps) {
   if (!node) return null;
@@ -37,15 +38,8 @@ export default function NodeDetailPanel({ node, onClose }: NodeDetailPanelProps)
   const type = node.node_type;
   const content = node.content_json;
 
-  const contentPreview = content
-    ? JSON.stringify(content, null, 2)
-        .split('\n')
-        .slice(0, PREVIEW_MAX_LINES)
-        .join('\n')
-    : null;
-
   return (
-    <div className="absolute right-4 top-4 z-20 w-[280px] bg-bg-secondary rounded-lg shadow-lg border border-border-subtle p-4">
+    <div className="absolute right-4 top-4 z-20 w-[420px] max-h-[calc(100%-2rem)] overflow-y-auto bg-bg-secondary rounded-lg shadow-lg border border-border-subtle p-4">
       {/* 顶部：类型标签 + 关闭按钮 */}
       <div className="flex items-start justify-between mb-3">
         <span
@@ -89,13 +83,13 @@ export default function NodeDetailPanel({ node, onClose }: NodeDetailPanelProps)
         </div>
       )}
 
-      {/* content_json 预览 */}
+      {/* 格式化简历预览 */}
       <div className="mt-3 pt-3 border-t border-border-subtle">
-        <div className="text-xs text-text-tertiary mb-1.5">内容预览</div>
-        {contentPreview ? (
-          <pre className="text-[10px] font-mono text-text-secondary bg-bg-tertiary rounded-md p-2 overflow-auto max-h-40 whitespace-pre-wrap break-all m-0">
-            {contentPreview}
-          </pre>
+        <div className="text-xs text-text-tertiary mb-2">简历预览</div>
+        {content ? (
+          <div className="bg-white rounded-md overflow-hidden">
+            <ResumePreview resumeData={content} templateId={DEFAULT_TEMPLATE} />
+          </div>
         ) : (
           <div className="text-xs text-text-muted">暂无内容</div>
         )}

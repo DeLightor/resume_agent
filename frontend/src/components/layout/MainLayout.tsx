@@ -10,6 +10,7 @@ import LeftPanel from './LeftPanel';
 import CenterPanel from './CenterPanel';
 import RightPanel from './RightPanel';
 import type { ActiveView } from '@/types/knowledge';
+import type { ResumeNode } from '@/types/tree';
 
 export default function MainLayout() {
   // 上传成功后递增，触发 VersionTree 重新拉取
@@ -24,6 +25,8 @@ export default function MainLayout() {
   >(null);
   // US-8：当前选中的模板 id（默认 modern）
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('modern');
+  // US-10：版本树节点列表（供 Diff 选择器和保存功能使用）
+  const [treeNodes, setTreeNodes] = useState<ResumeNode[]>([]);
 
   const handleTreeRefresh = useCallback(() => {
     setTreeRefreshKey((k) => k + 1);
@@ -50,6 +53,11 @@ export default function MainLayout() {
     setSelectedTemplateId(id);
   }, []);
 
+  // 版本树节点列表更新（CenterPanel 加载树数据时回灌）
+  const handleTreeNodesUpdate = useCallback((nodes: ResumeNode[]) => {
+    setTreeNodes(nodes);
+  }, []);
+
   return (
     <div
       className="flex overflow-hidden"
@@ -70,6 +78,7 @@ export default function MainLayout() {
         resumeData={generatedResumeData}
         templateId={selectedTemplateId}
         onTemplateSelect={handleTemplateSelect}
+        onTreeNodesUpdate={handleTreeNodesUpdate}
       />
       {/* 右栏始终可见：JD 截图分析 / Gap 报告 / AI 导师均在此栏，
           无需随导航项切换（"职位截图分析"等导航仅影响中栏视图） */}
@@ -77,6 +86,7 @@ export default function MainLayout() {
         resumeData={generatedResumeData}
         onResumeGenerated={handleResumeGenerated}
         templateId={selectedTemplateId}
+        treeNodes={treeNodes}
       />
     </div>
   );

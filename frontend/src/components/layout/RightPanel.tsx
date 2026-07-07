@@ -10,6 +10,7 @@ import JDCard from '@/components/jd/JDCard';
 import GapReportView from '@/components/gap/GapReportView';
 import GenerateView from '@/components/generate/GenerateView';
 import type { JDAnalysisResult } from '@/types/jd';
+import type { ResumeNode } from '@/types/tree';
 
 interface RightPanelProps {
   /** US-8：AI 生成的简历数据（用于联动，由 MainLayout 提升） */
@@ -18,11 +19,14 @@ interface RightPanelProps {
   onResumeGenerated?: (data: Record<string, unknown>) => void;
   /** US-8：当前选中的模板 id，用于导出 PDF */
   templateId?: string;
+  /** US-10：版本树节点列表，用于"保存到节点"功能 */
+  treeNodes?: ResumeNode[];
 }
 
 export default function RightPanel({
   onResumeGenerated,
   templateId,
+  treeNodes,
 }: RightPanelProps) {
   // JD 分析结果（US-4）：null 时显示上传区，非 null 时显示 JDCard
   const [jdResult, setJdResult] = useState<JDAnalysisResult | null>(null);
@@ -117,6 +121,7 @@ export default function RightPanel({
           structuredJD={(jdResult?.structured ?? null) as Record<string, unknown> | null}
           onResumeGenerated={onResumeGenerated}
           templateId={templateId}
+          treeNodes={treeNodes}
         />
       </section>
     </aside>
