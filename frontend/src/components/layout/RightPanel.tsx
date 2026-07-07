@@ -8,8 +8,10 @@ import { useState } from 'react';
 import JDUploadZone from '@/components/jd/JDUploadZone';
 import JDCard from '@/components/jd/JDCard';
 import GapReportView from '@/components/gap/GapReportView';
+import TutorView from '@/components/tutor/TutorView';
 import GenerateView from '@/components/generate/GenerateView';
 import type { JDAnalysisResult } from '@/types/jd';
+import type { GapReport } from '@/types/gap';
 import type { ResumeNode } from '@/types/tree';
 
 interface RightPanelProps {
@@ -30,13 +32,17 @@ export default function RightPanel({
 }: RightPanelProps) {
   // JD 分析结果（US-4）：null 时显示上传区，非 null 时显示 JDCard
   const [jdResult, setJdResult] = useState<JDAnalysisResult | null>(null);
+  // Gap 报告结果（US-11）：供 TutorView 使用
+  const [gapReport, setGapReport] = useState<GapReport | null>(null);
 
   function handleJDAnalyzed(result: JDAnalysisResult) {
     setJdResult(result);
+    setGapReport(null); // 重新分析 JD 时重置 Gap 报告
   }
 
   function handleReset() {
     setJdResult(null);
+    setGapReport(null);
   }
 
   return (
@@ -96,8 +102,32 @@ export default function RightPanel({
           </svg>
           知识盲区报告
         </div>
-        <GapReportView structuredJD={(jdResult?.structured ?? null) as Record<string, unknown> | null} />
+        <GapReportView
+          structuredJD={(jdResult?.structured ?? null) as Record<string, unknown> | null}
+          onReport={setGapReport}
+        />
       </section>
+
+      {/* Section 2.5: AI 导师学习建议（US-11） */}
+      {gapReport && (
+        <section className="border-b border-border-subtle p-4">
+          <div className="flex items-center gap-2 mb-3 text-sm font-semibold text-text-primary">
+            <svg
+              className="w-4 h-4 opacity-70"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              style={{ color: 'var(--color-brand-primary)' }}
+            >
+              <path d="M8 1.5a6.5 6.5 0 1 0 6.5 6.5" />
+              <path d="M8 5v3l2 2" />
+            </svg>
+            AI 导师学习建议
+          </div>
+          <TutorView gapItems={gapReport.items} />
+        </section>
+      )}
 
       {/* Section 3: AI 生成预览区 */}
       <section className="p-4">

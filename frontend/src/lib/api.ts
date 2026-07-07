@@ -25,6 +25,7 @@ import type { GenerateResult } from '@/types/generate';
 import type { SuggestResult } from '@/types/suggest';
 import type { TemplateInfo } from '@/types/template';
 import type { DiffResult } from '@/types/diff';
+import type { TutorResult } from '@/types/tutor';
 
 const BASE_URL = '/api';
 
@@ -346,4 +347,16 @@ export async function updateNodeContent(
   content: Record<string, unknown>,
 ): Promise<void> {
   await api.put(`/tree/node/${nodeId}`, { content_json: content });
+}
+
+// ===== AI 导师 API（US-11）=====
+
+/**
+ * 获取 AI 导师学习建议。
+ * POST /api/tutor/suggest，传入 Gap 报告技能项，返回学习路径和资源推荐。
+ */
+export async function getTutorSuggestions(
+  items: { skill: string; category: string; status: string }[],
+): Promise<TutorResult> {
+  return api.post<TutorResult>('/tutor/suggest', { items });
 }

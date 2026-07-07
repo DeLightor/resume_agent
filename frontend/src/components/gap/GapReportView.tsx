@@ -11,6 +11,8 @@ import type { GapReport, GapItem } from '@/types/gap';
 interface GapReportViewProps {
   /** JD 结构化数据（来自 US-4 分析结果） */
   structuredJD: Record<string, unknown> | null;
+  /** Gap 报告生成成功后回调（US-11：供 TutorView 使用） */
+  onReport?: (report: GapReport) => void;
 }
 
 type Status = 'idle' | 'loading' | 'done' | 'error';
@@ -81,7 +83,7 @@ function ScoreRing({ score }: { score: number }) {
   );
 }
 
-export default function GapReportView({ structuredJD }: GapReportViewProps) {
+export default function GapReportView({ structuredJD, onReport }: GapReportViewProps) {
   const [status, setStatus] = useState<Status>('idle');
   const [report, setReport] = useState<GapReport | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -94,6 +96,7 @@ export default function GapReportView({ structuredJD }: GapReportViewProps) {
       const result = await generateGapReport(structuredJD);
       setReport(result);
       setStatus('done');
+      onReport?.(result);
     } catch (err) {
       setStatus('error');
       setErrorMsg(err instanceof Error ? err.message : '生成报告失败');

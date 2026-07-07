@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     mineru_api_token: str = ""
     mineru_api_base: str = "https://mineru.net"
 
+    # === Tavily Web 搜索 API（US-11 导师建议增强）===
+    tavily_api_key: str = ""
+
     # === 数据存储 ===
     resume_agent_home: Path = Path.home() / ".resume-agent"
     sqlite_path: Path = Path.home() / ".resume-agent" / "data.db"
