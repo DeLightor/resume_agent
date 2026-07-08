@@ -1,21 +1,15 @@
 """版本树构建服务。
 
-根据结构化简历数据生成或更新版本树节点，实现「公司 + 方向」级别的去重。
+上传简历后，将结构化简历数据写入方向（branch）节点的 content_json，
+不创建公司节点（简历中通常不含应聘公司信息）。
 
-对齐 design.md 第 2.4 节：
-
-```
-1. 确保 Master 节点存在（init_db 已 seed）
-2. 查找 primary_direction 对应的 branch 节点
-   - 不存在 → 创建 branch（parent_id=master, direction=primary_direction）
-3. 查找同方向的 company 节点（company 字段匹配）
-   - 存在 → 更新 content_json（去重，保留最新版）
-   - 不存在 → 创建 company 节点（parent_id=branch_id, content_json=resume_json）
-```
+同时对齐 US-12：将 basic 字段映射为 personal_info 写入节点，
+供左栏个人信息表单读取和编辑。
 """
 
 from __future__ import annotations
 
+import json
 import uuid
 from pathlib import Path
 from typing import Any
@@ -36,58 +30,83 @@ _DIRECTION_TITLES: dict[str, str] = {
 
 
 class TreeBuilder:
-    """根据结构化简历数据生成版本树节点。
+    """根据结构化简历数据更新版本树方向节点。
 
     每次调用 ``build_from_resume`` 会：
     1. 确保 Master 节点存在；
     2. 查找或创建 primary_direction 对应的 branch 节点；
-    3. 查找同方向同公司的 company 节点：存在则更新 content_json，不存在则创建。
+    3. 将结构化简历写入 branch 节点的 content_json；
+    4. 将 basic + education 映射为 personal_info 写入 content_json。
     """
 
     def __init__(self, db_path: Path | str | None = None) -> None:
-        """初始化 TreeBuilder。
-
-        Args:
-            db_path: 数据库路径，默认使用 ``settings.sqlite_path``。
-        """
         self.db_path = db_path
 
     def build_from_resume(self, resume: StructuredResume) -> dict[str, Any]:
-        """根据结构化简历创建或更新版本树节点。
+        """将结构化简历写入方向节点。
 
         Args:
             resume: 已提取的结构化简历数据。
 
         Returns:
-            包含 ``node``（创建/更新的 company 节点信息）与
-            ``deduplicated``（是否命中已有 company 节点并更新）的字典。
+            包含 ``node``（branch 节点信息）与 ``deduplicated`` 的字典。
         """
         with get_connection(self.db_path) as conn:
             self._ensure_master(conn)
             branch_node = self._find_or_create_branch(conn, resume.primary_direction)
-            company_name = self._extract_company_name(resume)
-            content_json = resume.model_dump_json()
 
-            existing_company = self._find_company(
-                conn, branch_node["node_id"], company_name
-            )
-            if existing_company is not None:
-                # 命中已有 company 节点 → 更新 content_json
-                self._update_company_content(
-                    conn, existing_company["node_id"], content_json
-                )
-                node = self._fetch_node(conn, existing_company["node_id"])
-                return {"node": node, "deduplicated": True}
+            # 构造 content_json：结构化简历 + personal_info
+            content = resume.model_dump()
+            content["personal_info"] = self._map_to_personal_info(resume)
+            content_json = json.dumps(content, ensure_ascii=False)
 
-            # 不存在 → 创建新 company 节点
-            new_node = self._create_company(
-                conn,
-                parent_id=branch_node["node_id"],
-                company=company_name,
-                direction=resume.primary_direction,
-                content_json=content_json,
+            # 更新 branch 节点
+            conn.execute(
+                """
+                UPDATE resume_versions
+                SET content_json = ?, updated_at = datetime('now')
+                WHERE node_id = ?
+                """,
+                (content_json, branch_node["node_id"]),
             )
-            return {"node": new_node, "deduplicated": False}
+
+            node = self._fetch_node(conn, branch_node["node_id"])
+            return {"node": node, "deduplicated": False}
+
+    def _map_to_personal_info(self, resume: StructuredResume) -> dict[str, Any]:
+        """将 StructuredResume 的 basic + education 映射为 personal_info 格式。
+
+        对齐 US-12 的 PersonalInfo schema。
+        """
+        basic = resume.basic
+        return {
+            "contact": {
+                "name": basic.name or "",
+                "gender": basic.gender or "",
+                "birth_date": basic.birth_date or "",
+                "phone": basic.phone or "",
+                "email": basic.email or "",
+                "location": basic.location or "",
+                "website": basic.website or "",
+                "github": basic.github or "",
+                "linkedin": basic.linkedin or "",
+            },
+            "job_intention": {
+                "target_role": "",
+                "expected_salary": "",
+                "availability": "",
+            },
+            "education": [
+                {
+                    "school": e.school or "",
+                    "degree": e.degree or "",
+                    "major": e.major or "",
+                    "period": e.period or "",
+                }
+                for e in resume.education
+            ],
+            "summary": "",
+        }
 
     # === 内部辅助方法 ===
 
@@ -122,7 +141,6 @@ class TreeBuilder:
             return row
 
         title = _DIRECTION_TITLES.get(direction, f"{direction}方向")
-        # 业务节点 ID 使用方向作为稳定标识（同一方向只创建一个 branch）
         node_id = f"branch-{direction}"
         node_uuid = str(uuid.uuid4())
         conn.execute(
@@ -143,79 +161,6 @@ class TreeBuilder:
             "company": None,
         }
 
-    def _find_company(
-        self, conn: Any, branch_node_id: str, company_name: str
-    ) -> dict[str, Any] | None:
-        """查找同 branch 下同名 company 节点。"""
-        if not company_name:
-            return None
-        row: dict[str, Any] | None = conn.execute(
-            """
-            SELECT * FROM resume_versions
-            WHERE node_type = ? AND company = ? AND parent_id = ?
-            """,
-            ("company", company_name, branch_node_id),
-        ).fetchone()
-        return row
-
-    def _update_company_content(
-        self, conn: Any, node_id: str, content_json: str
-    ) -> None:
-        """更新已有 company 节点的 content_json 与 updated_at。"""
-        conn.execute(
-            """
-            UPDATE resume_versions
-            SET content_json = ?, updated_at = datetime('now')
-            WHERE node_id = ?
-            """,
-            (content_json, node_id),
-        )
-
-    def _create_company(
-        self,
-        conn: Any,
-        parent_id: str,
-        company: str,
-        direction: str,
-        content_json: str,
-    ) -> dict[str, Any]:
-        """创建新的 company 节点并返回。"""
-        node_uuid = str(uuid.uuid4())
-        # 业务节点 ID：方向-公司名（去空格、小写化以保持稳定）
-        safe_company = (
-            company.replace(" ", "-").lower() if company else "unknown"
-        )
-        node_id = f"{direction}-{safe_company}"
-        title = f"{company} {direction}" if company else f"{direction} 节点"
-
-        conn.execute(
-            """
-            INSERT INTO resume_versions
-                (id, node_id, parent_id, node_type, title, company, direction, content_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                node_uuid,
-                node_id,
-                parent_id,
-                "company",
-                title,
-                company,
-                direction,
-                content_json,
-            ),
-        )
-        return {
-            "id": node_uuid,
-            "node_id": node_id,
-            "parent_id": parent_id,
-            "node_type": "company",
-            "title": title,
-            "company": company,
-            "direction": direction,
-            "content_json": content_json,
-        }
-
     def _fetch_node(self, conn: Any, node_id: str) -> dict[str, Any]:
         """查询单个节点。"""
         row: dict[str, Any] = conn.execute(
@@ -223,21 +168,6 @@ class TreeBuilder:
             (node_id,),
         ).fetchone()
         return row
-
-    def _extract_company_name(self, resume: StructuredResume) -> str:
-        """从结构化简历中提取代表公司名。
-
-        优先取第一条 experience 的 company；否则取第一条 projects 的 name 兜底。
-        """
-        if resume.experience:
-            company = resume.experience[0].company
-            if company:
-                return company
-        if resume.projects:
-            name = resume.projects[0].name
-            if name:
-                return name
-        return "Unknown"
 
 
 __all__ = ["TreeBuilder"]

@@ -211,24 +211,60 @@ def create_node(req: CreateNodeRequest) -> dict[str, Any]:
         if existing is not None:
             return error("NODE_ID_CONFLICT", f"节点 ID 已存在: {node_id}")
 
-        # 5. INSERT 到 resume_versions
+        # 5. 继承父节点 personal_info（US-12）
+        parent_content_raw = parent["content_json"]
+        inherited_personal_info = None
+        if parent_content_raw:
+            with contextlib.suppress(json.JSONDecodeError, TypeError):
+                parent_content = (
+                    json.loads(parent_content_raw)
+                    if isinstance(parent_content_raw, str)
+                    else parent_content_raw
+                )
+                if isinstance(parent_content, dict):
+                    inherited_personal_info = parent_content.get("personal_info")
+
+        # 6. INSERT 到 resume_versions
         node_uuid = str(uuid.uuid4())
-        conn.execute(
-            """
-            INSERT INTO resume_versions
-                (id, node_id, parent_id, node_type, title, company, direction)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                node_uuid,
-                node_id,
-                req.parent_id,
-                req.node_type,
-                req.title,
-                req.company,
-                req.direction,
-            ),
-        )
+        # 如果继承了 personal_info，写入新节点的 content_json
+        if inherited_personal_info:
+            content_json_str = json.dumps(
+                {"personal_info": inherited_personal_info}, ensure_ascii=False
+            )
+            conn.execute(
+                """
+                INSERT INTO resume_versions
+                    (id, node_id, parent_id, node_type, title, company, direction, content_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    node_uuid,
+                    node_id,
+                    req.parent_id,
+                    req.node_type,
+                    req.title,
+                    req.company,
+                    req.direction,
+                    content_json_str,
+                ),
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO resume_versions
+                    (id, node_id, parent_id, node_type, title, company, direction)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    node_uuid,
+                    node_id,
+                    req.parent_id,
+                    req.node_type,
+                    req.title,
+                    req.company,
+                    req.direction,
+                ),
+            )
 
         row = conn.execute(
             "SELECT * FROM resume_versions WHERE node_id = ?",
@@ -314,3 +350,51 @@ def update_node(node_id: str, req: UpdateNodeRequest) -> dict[str, Any]:
         ).fetchone()
 
     return success(_row_to_node(updated))
+
+
+@router.delete("/node/{node_id}")
+def delete_node(node_id: str) -> dict[str, Any]:
+    """删除节点及其所有子孙节点。
+
+    递归查找并删除以 node_id 为根的子树（含自身）。
+    master 节点不可删除。
+
+    Args:
+        node_id: 要删除的节点 ID。
+
+    Returns:
+        统一响应 envelope，data 含 deleted_count。
+    """
+    if node_id == "master":
+        return error("CANNOT_DELETE_MASTER", "master 节点不可删除")
+
+    with get_connection() as conn:
+        # 检查节点是否存在
+        row = conn.execute(
+            "SELECT node_id FROM resume_versions WHERE node_id = ?",
+            (node_id,),
+        ).fetchone()
+        if row is None:
+            return error("NODE_NOT_FOUND", f"节点不存在: {node_id}")
+
+        # 递归收集所有子孙节点 ID
+        to_delete: list[str] = [node_id]
+        queue: list[str] = [node_id]
+        while queue:
+            current = queue.pop(0)
+            children = conn.execute(
+                "SELECT node_id FROM resume_versions WHERE parent_id = ?",
+                (current,),
+            ).fetchall()
+            for child in children:
+                to_delete.append(child["node_id"])
+                queue.append(child["node_id"])
+
+        # 批量删除
+        placeholders = ",".join("?" * len(to_delete))
+        conn.execute(
+            f"DELETE FROM resume_versions WHERE node_id IN ({placeholders})",
+            to_delete,
+        )
+
+    return success({"deleted_count": len(to_delete)})

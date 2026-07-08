@@ -26,6 +26,7 @@ import type { SuggestResult } from '@/types/suggest';
 import type { TemplateInfo } from '@/types/template';
 import type { DiffResult } from '@/types/diff';
 import type { TutorResult } from '@/types/tutor';
+import type { PersonalInfo } from '@/types/personal';
 
 const BASE_URL = '/api';
 
@@ -155,6 +156,18 @@ export async function updateNode(
   return api.put<ResumeNode>(
     `/tree/node/${encodeURIComponent(nodeId)}`,
     updates,
+  );
+}
+
+/**
+ * 删除节点及其所有子孙节点（US-12 补充）。
+ * DELETE /api/tree/node/{node_id}
+ */
+export async function deleteNode(
+  nodeId: string,
+): Promise<{ deleted_count: number }> {
+  return api.del<{ deleted_count: number }>(
+    `/tree/node/${encodeURIComponent(nodeId)}`,
   );
 }
 
@@ -359,4 +372,31 @@ export async function getTutorSuggestions(
   items: { skill: string; category: string; status: string }[],
 ): Promise<TutorResult> {
   return api.post<TutorResult>('/tutor/suggest', { items });
+}
+
+// ===== 个人信息 API（US-12）=====
+
+/** 获取节点的个人信息 */
+export async function getPersonalInfo(nodeId: string): Promise<PersonalInfo> {
+  const result = await api.get<{ personal_info: PersonalInfo }>(
+    `/tree/node/${nodeId}/personal-info`,
+  );
+  return result.personal_info;
+}
+
+/** 更新节点的个人信息 */
+export async function updatePersonalInfo(
+  nodeId: string,
+  info: PersonalInfo,
+): Promise<void> {
+  await api.put(`/tree/node/${nodeId}/personal-info`, info);
+}
+
+/** 从知识库提取个人信息 */
+export async function extractPersonalInfo(): Promise<PersonalInfo> {
+  const result = await api.post<{ personal_info: PersonalInfo }>(
+    '/personal-info/extract',
+    {},
+  );
+  return result.personal_info;
 }

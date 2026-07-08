@@ -13,7 +13,7 @@ import KnowledgeView from '@/components/knowledge/KnowledgeView';
 import TemplateSelector from '@/components/template/TemplateSelector';
 import ResumePreview from '@/components/template/ResumePreview';
 import DiffView from '@/components/diff/DiffView';
-import { getTemplates } from '@/lib/api';
+import { getTemplates, deleteNode } from '@/lib/api';
 import type { ResumeNode, TreeData } from '@/types/tree';
 import type { ActiveView } from '@/types/knowledge';
 import type { TemplateInfo } from '@/types/template';
@@ -46,6 +46,8 @@ interface CenterPanelProps {
   onTemplateSelect?: (id: string) => void;
   /** US-10：树数据加载后回灌节点列表给 MainLayout（供 Diff 选择器和保存功能使用） */
   onTreeNodesUpdate?: (nodes: ResumeNode[]) => void;
+  /** US-12：选中节点变化时通知 MainLayout（传给左栏 PersonalInfoForm） */
+  onNodeSelect?: (nodeId: string | null) => void;
 }
 
 /**
@@ -76,6 +78,7 @@ export default function CenterPanel({
   templateId = 'modern',
   onTemplateSelect,
   onTreeNodesUpdate,
+  onNodeSelect,
 }: CenterPanelProps) {
   const [activeTab, setActiveTab] = useState<string>('版本树');
   const [selectedNode, setSelectedNode] = useState<ResumeNode | null>(null);
@@ -104,7 +107,8 @@ export default function CenterPanel({
 
   const handleNodeSelect = useCallback((node: ResumeNode) => {
     setSelectedNode(node);
-  }, []);
+    onNodeSelect?.(node.node_id);
+  }, [onNodeSelect]);
 
   const handleTreeLoad = useCallback((data: TreeData) => {
     setTree(data);
@@ -123,6 +127,21 @@ export default function CenterPanel({
     [onTemplateSelect],
   );
 
+  const handleDeleteNode = useCallback(() => {
+    if (!selectedNode) return;
+    if (window.confirm(`确认删除节点 "${selectedNode.title || selectedNode.node_id}" 吗？`)) {
+      deleteNode(selectedNode.node_id)
+        .then(() => {
+          setSelectedNode(null);
+          onNodeSelect?.(null);
+          onTreeRefresh?.();
+        })
+        .catch((err) => {
+          console.error('删除节点失败:', err);
+        });
+    }
+  }, [selectedNode, onNodeSelect, onTreeRefresh]);
+
   // 知识库视图：渲染 KnowledgeView，不显示版本树 Tab / 面包屑
   if (activeView === 'knowledge') {
     return (
@@ -134,6 +153,24 @@ export default function CenterPanel({
       </main>
     );
   }
+
+  // 预览数据：优先用选中节点的 content_json，否则用 AI 生成的 resumeData
+  const previewData: Record<string, unknown> | null = (() => {
+    if (selectedNode?.content_json) {
+      try {
+        const parsed =
+          typeof selectedNode.content_json === 'string'
+            ? JSON.parse(selectedNode.content_json)
+            : selectedNode.content_json;
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          return parsed as Record<string, unknown>;
+        }
+      } catch {
+        // JSON 解析失败，fallback
+      }
+    }
+    return resumeData;
+  })();
 
   const breadcrumbPath = computePath(tree, selectedNode);
 
@@ -171,7 +208,10 @@ export default function CenterPanel({
             />
           </div>
           <div className="flex-1 overflow-y-auto p-4 bg-bg-secondary">
-            <ResumePreview resumeData={resumeData} templateId={templateId} />
+            <ResumePreview
+              resumeData={previewData}
+              templateId={templateId}
+            />
           </div>
         </div>
       ) : activeTab === 'Diff 对比' ? (
@@ -237,6 +277,23 @@ export default function CenterPanel({
                 <path d="M2 4h12M2 8h8M2 12h10" />
               </svg>
               版本对比 Diff
+            </button>
+            <button
+              onClick={handleDeleteNode}
+              disabled={!selectedNode}
+              className="inline-flex items-center gap-2 px-5 py-2 bg-transparent text-text-secondary text-sm font-medium border border-border-default rounded-md cursor-pointer transition-all font-body hover:border-border-strong hover:text-text-primary hover:bg-bg-hover disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+              >
+                <path d="M3 4h10M5 4V2h6v2M5 4l1 10h4l1-10" />
+              </svg>
+              删除节点
             </button>
             {/* US-8：模板选择已移至"编辑器"Tab，此处不再重复展示 */}
           </div>
