@@ -388,8 +388,8 @@ PDF 导出（reportlab，与预览一致）
 |------|------|------|----------|
 | **v1.0 MVP** | US-1~US-7：资产冷启动 + 版本树 + 知识库RAG + JD分析 + Gap报告 + AI生成 + PDF导出 | ✅ 已完成 | 6 周 |
 | **v1.1** | US-8~US-11：简历预览/模板 + 智能补全 + 版本Diff + AI导师 | ✅ 已完成 | 4-5 周 |
-| **v1.2** | US-12~US-16：个人信息管理 + 段落可排序 + 一键生成 + 信息完整性检测 + 模板配置化 | 📋 规划中 | +3 周 |
-| **v1.3** | 上游继承自动合并 + 一键安装脚本 + Windows 原生支持 | 📋 规划中 | +3 周 |
+| **v1.2** | US-12~US-16：个人信息管理 + 段落可排序 + 一键生成 + 信息完整性检测 + 模板配置化 | ✅ 已完成 | 3 周 |
+| **v1.3** | US-17~US-20：上游变更检测+选择性合并 + 一键安装脚本 + Windows 原生支持 | 📋 规划中 | +3 周 |
 | **v2.0** | 开源模型本地运行(Ollama) + 模板市场 + 插件系统 + 移动端 | 📋 规划中 | +6 周 |
 
 ### Technical Risks
@@ -455,3 +455,117 @@ LLM 无法真正验证经历是否客观发生过，只能检测 AI 套话、前
 - **新增**：US-16 模板系统配置化（TemplateConfig schema，重写现有 + 新增 3 套）
 - **更新**：路线图新增 v1.2（US-12~US-16），原 v1.2 内容移至 v1.3
 - **更新**：API 集成点新增 4 个端点
+
+---
+
+## v1.3 Product Requirements
+
+### Executive Summary
+
+**Problem**: v1.2 中个人信息和段落顺序在子节点创建时快照继承，master 修改后不会自动传播。用户需要手动逐个更新子节点，容易遗漏。同时项目缺少一键安装和 Windows 支持，上手门槛高。
+
+**Solution**: 实现 Git 式的"上游变更提示 + 选择性合并"机制，master 修改后子节点标记"有更新可合并"，用户在 Diff 视图逐字段接受/拒绝。同时提供一键安装脚本和 Windows 原生支持。
+
+**Success Criteria**:
+- master 修改 personal_info 后，所有子节点在 3 秒内标记"有更新可合并"
+- 用户可在 Diff 视图逐字段接受/拒绝变更，接受后子节点数据更新
+- 一键安装脚本在 macOS/Linux/Windows 上 5 分钟内完成环境搭建
+- Windows PowerShell 原生支持所有开发命令
+
+### User Stories
+
+#### US-17：上游变更检测与提示（B2）
+**As a** 求职者，**I want** master 节点修改个人信息后，子分支自动标记"有更新可合并"，**so that** 我不会遗漏上游的变更。
+
+**Acceptance Criteria：**
+- [ ] master 节点修改 personal_info 后，所有子节点标记 `has_upstream_update: true`
+- [ ] 版本树画布中，有上游更新的节点显示橙色徽标
+- [ ] 点击节点时，侧栏显示"上游有 N 项变更可合并"提示
+- [ ] 变更检测范围：仅 personal_info（字段级）
+- [ ] 合并粒度：字段级（如 contact.name 整体接受/拒绝，不拆到子字段）
+- [ ] 变更记录存入节点的 `upstream_changes` 字段
+
+#### US-18：选择性合并 Diff 视图（B2）
+**As a** 求职者，**I want** 在 Diff 视图中逐字段接受或拒绝上游变更，**so that** 子节点的定制修改不会被覆盖。
+
+**Acceptance Criteria：**
+- [ ] 点击"有更新可合并"提示，打开 Diff 视图
+- [ ] Diff 视图以字段为单位展示：旧值 → 新值，接受/拒绝按钮
+- [ ] 支持的字段：personal_info.contact（name/phone/email 等）、personal_info.education、personal_info.summary
+- [ ] 接受后子节点对应字段更新为 master 的值
+- [ ] 拒绝后子节点保持原值，标记为"已忽略"
+- [ ] 全部处理完后，`has_upstream_update` 标记清除
+- [ ] 支持批量"全部接受"
+
+#### US-19：一键安装脚本（D1）
+**As a** 新用户，**I want** 一键安装脚本自动检测环境、安装依赖、配置 API Key，**so that** 5 分钟内完成项目搭建。
+
+**Acceptance Criteria：**
+- [ ] 提供 `install.sh`（macOS/Linux）和 `install.ps1`（Windows PowerShell）
+- [ ] 自动检测：Node.js ≥ 20、pnpm ≥ 9、Python ≥ 3.12、uv、Docker（可选）
+- [ ] 缺失依赖时提示安装命令（不自动安装系统级软件）
+- [ ] 前后端依赖安装：`pnpm install` + `uv sync`
+- [ ] 交互式配置引导：LLM_PROVIDER、LLM_API_KEY、LLM_BASE_URL、LLM_MODEL
+- [ ] 自动创建 `.env` 文件（从 `.env.example` 复制）
+- [ ] 检测 Docker 可用性，提示 `docker compose up` 一键启动
+- [ ] 安装完成提示访问地址（localhost:5173）
+
+#### US-20：Windows 原生支持（D2）
+**As a** Windows 用户，**I want** 在 PowerShell 中原生运行所有开发命令，**so that** 不需要 WSL 也能使用 Resume-Agent。
+
+**Acceptance Criteria：**
+- [ ] 所有 Makefile 命令提供 PowerShell 等效版本（`Makefile.ps1` 或 `scripts/*.ps1`）
+- [ ] `install.ps1` 安装脚本完整支持 Windows
+- [ ] 路径分隔符兼容（`os.path.join` 不硬编码 `/`）
+- [ ] SQLite 路径默认 `~/.resume-agent/data.db`（Windows 下 `%USERPROFILE%\.resume-agent\`）
+- [ ] Docker Compose 方式完整支持 Windows Docker Desktop
+- [ ] README 补充 Windows 安装说明
+- [ ] CI 增加 Windows 矩阵测试（可选）
+
+### Technical Specifications
+
+#### 上游变更检测
+
+```
+master 节点 personal_info 被修改
+    ↓
+后端检测：遍历所有子节点（递归）
+    ↓
+对比 master.personal_info vs child.personal_info
+    ↓
+有差异 → child.upstream_changes = { field: { old, new } }
+         child.has_upstream_update = True
+    ↓
+前端轮询/刷新时获取标记
+    ↓
+用户在 Diff 视图逐字段接受/拒绝
+```
+
+**API 端点：**
+- `GET /api/tree/node/{node_id}/upstream-changes` — 获取上游变更列表
+- `POST /api/tree/node/{node_id}/merge` — 合并指定字段
+- `POST /api/tree/node/{node_id}/merge/all` — 批量全部接受
+
+**数据库变更：**
+- `resume_versions` 表新增 `has_upstream_update BOOLEAN DEFAULT FALSE`
+- `resume_versions` 表新增 `upstream_changes TEXT`（JSON）
+
+#### 安装脚本架构
+
+```
+install.sh / install.ps1
+    ├── 1. 环境检测（node/pnpm/python/uv/docker）
+    ├── 2. 依赖安装（pnpm install + uv sync）
+    ├── 3. 配置引导（交互式 .env 生成）
+    ├── 4. Docker 检测（可选）
+    └── 5. 完成提示
+```
+
+### Risks
+
+| 风险 | 影响 | 概率 | 缓解措施 |
+|------|------|------|----------|
+| 上游变更检测性能 | 大量子节点时遍历慢 | 低 | 递归遍历限 ≤ 50 节点，异步处理 |
+| 合并冲突复杂度 | 用户困惑 | 中 | 仅支持 personal_info，字段级粒度，不做内容段落合并 |
+| Windows 路径兼容 | 部分功能不可用 | 中 | 使用 os.path.join，不硬编码路径分隔符 |
+| 安装脚本兼容性 | 不同环境检测失败 | 中 | 分步骤执行，失败时提示手动操作 |
