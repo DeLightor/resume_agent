@@ -179,6 +179,12 @@ class MergeRequest(BaseModel):
     field: str
 
 
+class RejectRequest(BaseModel):
+    """单字段拒绝请求。"""
+
+    field: str
+
+
 @router.get("/tree/node/{node_id}/upstream-changes")
 async def get_upstream_changes(node_id: str) -> dict[str, Any]:
     """获取节点的上游变更列表。"""
@@ -317,4 +323,59 @@ async def merge_all(node_id: str) -> dict[str, Any]:
     return success({
         "merged_count": merged_count,
         "all_merged": True,
+    })
+
+
+@router.post("/tree/node/{node_id}/reject")
+async def reject_field(node_id: str, req: RejectRequest) -> dict[str, Any]:
+    """拒绝指定字段的上游变更（US-18）。
+
+    从 upstream_changes 中移除该字段，不修改 content_json。
+    当所有字段都被处理完后，清除 has_upstream_update 标记。
+    """
+    from resume_agent.db.connection import get_connection
+
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT upstream_changes FROM resume_versions WHERE node_id = ?",
+            [node_id],
+        ).fetchone()
+
+    if not row:
+        return error("NODE_NOT_FOUND", f"节点 {node_id} 不存在")
+
+    changes_raw = row["upstream_changes"]
+    if not changes_raw:
+        return error("NO_CHANGES", "没有待处理的上游变更")
+
+    try:
+        changes = json.loads(changes_raw) if isinstance(changes_raw, str) else changes_raw
+    except (json.JSONDecodeError, TypeError):
+        return error("PARSE_ERROR", "变更数据解析失败")
+
+    if req.field not in changes:
+        return error("FIELD_NOT_FOUND", f"字段 {req.field} 没有待处理的变更")
+
+    # 从变更列表中移除被拒绝的字段
+    del changes[req.field]
+
+    # 如果还有剩余变更，保留标记；否则清除
+    if changes:
+        changes_json = json.dumps(changes, ensure_ascii=False)
+        with get_connection() as conn:
+            conn.execute(
+                "UPDATE resume_versions SET upstream_changes = ? WHERE node_id = ?",
+                [changes_json, node_id],
+            )
+    else:
+        with get_connection() as conn:
+            conn.execute(
+                "UPDATE resume_versions SET upstream_changes = NULL, has_upstream_update = 0 WHERE node_id = ?",
+                [node_id],
+            )
+
+    return success({
+        "field": req.field,
+        "rejected": True,
+        "remaining_changes": len(changes),
     })

@@ -14,7 +14,7 @@ import TemplateSelector from '@/components/template/TemplateSelector';
 import ResumePreview from '@/components/template/ResumePreview';
 import DiffView from '@/components/diff/DiffView';
 import CompletenessBar from '@/components/completeness/CompletenessBar';
-import { getTemplates, getTree, deleteNode, generateFull, regenerateSection, updateSection, getUpstreamChanges, mergeAll } from '@/lib/api';
+import { getTemplates, getTree, deleteNode, generateFull, regenerateSection, updateSection, getUpstreamChanges, mergeAll, mergeField, rejectField } from '@/lib/api';
 import type { UpstreamChanges } from '@/lib/api';
 import type { ResumeNode, TreeData } from '@/types/tree';
 import type { ActiveView } from '@/types/knowledge';
@@ -155,6 +155,53 @@ export default function CenterPanel({
       const updated = data.nodes.find((n) => n.node_id === selectedNode.node_id);
       if (updated) setSelectedNode(updated);
       onTreeNodesUpdate?.(data.nodes);
+    } catch {
+      // 静默失败
+    }
+  }, [selectedNode, onTreeNodesUpdate]);
+
+  // US-18: 单字段接受合并
+  const handleMergeField = useCallback(async (field: string) => {
+    if (!selectedNode) return;
+    try {
+      await mergeField(selectedNode.node_id, field);
+      // 刷新上游变更状态
+      const data = await getUpstreamChanges(selectedNode.node_id);
+      if (data.has_upstream_update && data.count > 0) {
+        setUpstreamChanges(data);
+      } else {
+        setUpstreamChanges(null);
+        setShowUpstreamPanel(false);
+        // 刷新树节点状态
+        const treeData = await getTree();
+        setTree(treeData);
+        const updated = treeData.nodes.find((n) => n.node_id === selectedNode.node_id);
+        if (updated) setSelectedNode(updated);
+        onTreeNodesUpdate?.(treeData.nodes);
+      }
+    } catch {
+      // 静默失败
+    }
+  }, [selectedNode, onTreeNodesUpdate]);
+
+  // US-18: 单字段拒绝
+  const handleRejectField = useCallback(async (field: string) => {
+    if (!selectedNode) return;
+    try {
+      await rejectField(selectedNode.node_id, field);
+      // 刷新上游变更状态
+      const data = await getUpstreamChanges(selectedNode.node_id);
+      if (data.has_upstream_update && data.count > 0) {
+        setUpstreamChanges(data);
+      } else {
+        setUpstreamChanges(null);
+        setShowUpstreamPanel(false);
+        const treeData = await getTree();
+        setTree(treeData);
+        const updated = treeData.nodes.find((n) => n.node_id === selectedNode.node_id);
+        if (updated) setSelectedNode(updated);
+        onTreeNodesUpdate?.(treeData.nodes);
+      }
     } catch {
       // 静默失败
     }
@@ -378,7 +425,24 @@ export default function CenterPanel({
 
                     return (
                       <div key={field} className="bg-white rounded-md border border-orange-200 p-2.5 space-y-1.5">
-                        <div className="text-xs font-medium text-text-primary">{fieldLabel}</div>
+                        <div className="flex items-center justify-between">
+                          <div className="text-xs font-medium text-text-primary">{fieldLabel}</div>
+                          {/* US-18: 逐字段接受/拒绝按钮 */}
+                          <div className="flex gap-1">
+                            <button
+                              onClick={() => handleMergeField(field)}
+                              className="px-2 py-0.5 text-[10px] font-medium text-white bg-green-500 hover:bg-green-600 rounded transition-colors"
+                            >
+                              接受
+                            </button>
+                            <button
+                              onClick={() => handleRejectField(field)}
+                              className="px-2 py-0.5 text-[10px] font-medium text-text-secondary bg-gray-100 hover:bg-gray-200 rounded transition-colors"
+                            >
+                              拒绝
+                            </button>
+                          </div>
+                        </div>
                         {isObjectDiff ? (
                           <div className="space-y-0.5">
                             {allKeys.map((key) => {

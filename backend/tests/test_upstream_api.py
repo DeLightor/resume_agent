@@ -180,3 +180,62 @@ def test_merge_all() -> None:
     assert body["ok"] is True
     assert body["data"]["all_merged"] is True
     assert body["data"]["merged_count"] > 0
+
+
+def test_reject_field() -> None:
+    """拒绝单个字段。"""
+    from resume_agent.main import app
+
+    _init_db()
+    client = TestClient(app)
+
+    # 创建子节点
+    child_id = _create_child_node(client, "master", "子分支六")
+
+    # 修改 master personal_info
+    _update_personal_info(client, "master", {
+        "contact": {"name": "拒绝测试", "phone": "13400000000", "email": "reject@test.com"},
+        "education": [],
+        "summary": "拒绝评价",
+    })
+
+    # 拒绝 contact 字段
+    resp = client.post(f"/api/tree/node/{child_id}/reject", json={"field": "contact"})
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["data"]["rejected"] is True
+    # 还有 summary 字段未处理
+    assert body["data"]["remaining_changes"] > 0
+
+
+def test_reject_all_fields_clears_flag() -> None:
+    """拒绝所有字段后清除 has_upstream_update。"""
+    from resume_agent.main import app
+
+    _init_db()
+    client = TestClient(app)
+
+    # 创建子节点
+    child_id = _create_child_node(client, "master", "子分支七")
+
+    # 修改 master personal_info（只有 contact 一个字段有变化）
+    _update_personal_info(client, "master", {
+        "contact": {"name": "清除标记", "phone": "13300000000", "email": "clear@test.com"},
+        "education": [],
+        "summary": "",
+    })
+
+    # 先查看有哪些变更
+    resp = client.get(f"/api/tree/node/{child_id}/upstream-changes")
+    changes = resp.json()["data"]["changes"]
+
+    # 拒绝所有变更字段
+    for field in changes:
+        resp = client.post(f"/api/tree/node/{child_id}/reject", json={"field": field})
+        body = resp.json()
+        assert body["ok"] is True
+
+    # 检查 has_upstream_update 已清除
+    resp2 = client.get(f"/api/tree/node/{child_id}/upstream-changes")
+    body2 = resp2.json()
+    assert body2["data"]["has_upstream_update"] is False

@@ -480,6 +480,11 @@ export async function mergeField(nodeId: string, field: string): Promise<{ merge
   return res;
 }
 
+export async function rejectField(nodeId: string, field: string): Promise<{ rejected: boolean; remaining_changes: number }> {
+  const res = await api.post<{ rejected: boolean; remaining_changes: number }>(`/tree/node/${nodeId}/reject`, { field });
+  return res;
+}
+
 export async function mergeAll(nodeId: string): Promise<{ merged_count: number; all_merged: boolean }> {
   const res = await api.post<{ merged_count: number; all_merged: boolean }>(`/tree/node/${nodeId}/merge/all`);
   return res;
