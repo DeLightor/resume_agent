@@ -15,8 +15,8 @@ import type { ParseResponse } from '@/types/resume';
 /** 上传状态机 */
 type UploadStatus = 'idle' | 'uploading' | 'parsing' | 'success' | 'error';
 
-/** 上传函数返回的最小契约：至少包含 id（用于后续解析） */
-type UploadResult = { id: string };
+/** 上传函数返回的最小契约：包含 upload_id 或 id（用于后续解析） */
+type UploadResult = { upload_id?: string; id?: string };
 
 interface UploadZoneProps {
   title: string;
@@ -106,7 +106,8 @@ export default function UploadZone({
       }
 
       setStatus('parsing');
-      const parseRes = parseFn ? await parseFn(upload.id) : await parseResume(upload.id);
+      const uploadId = ('upload_id' in upload ? upload.upload_id : (upload as { id?: string }).id) ?? '';
+      const parseRes = parseFn ? await parseFn(uploadId) : await parseResume(uploadId);
       setStatus('success');
       onFileUploaded?.(parseRes);
     } catch (err) {

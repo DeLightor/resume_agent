@@ -8,6 +8,7 @@
 import { useState } from 'react';
 import UploadZone from '@/components/common/UploadZone';
 import KnowledgeStatus from '@/components/common/KnowledgeStatus';
+import PersonalInfoForm from '@/components/personal/PersonalInfoForm';
 import { uploadKnowledge } from '@/lib/api';
 import type { ActiveView } from '@/types/knowledge';
 
@@ -85,6 +86,8 @@ interface LeftPanelProps {
   knowledgeRefreshKey?: number;
   /** 导航项点击回调，通知父组件切换中栏视图 */
   onNavigate?: (view: ActiveView) => void;
+  /** 当前选中的版本树节点 ID（US-12 个人信息） */
+  selectedNodeId?: string | null;
 }
 
 export default function LeftPanel({
@@ -92,6 +95,7 @@ export default function LeftPanel({
   onKnowledgeRefresh,
   knowledgeRefreshKey = 0,
   onNavigate,
+  selectedNodeId = null,
 }: LeftPanelProps) {
   const [activeNav, setActiveNav] = useState('总览面板');
 
@@ -198,6 +202,9 @@ export default function LeftPanel({
           }
         />
       </div>
+
+      {/* Personal info form (US-12) */}
+      <PersonalInfoForm nodeId={selectedNodeId} />
 
       {/* Knowledge base status */}
       <KnowledgeStatus refreshKey={knowledgeRefreshKey} />

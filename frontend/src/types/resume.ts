@@ -53,7 +53,7 @@ export interface StructuredResume {
 
 /** POST /api/resumes/upload 响应 data */
 export interface UploadResponse {
-  id: string;
+  upload_id: string;
   file_name: string;
   file_type: string;
   parse_status: ParseStatus;

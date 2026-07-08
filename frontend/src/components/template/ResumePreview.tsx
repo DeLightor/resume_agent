@@ -1,41 +1,36 @@
 // frontend/src/components/template/ResumePreview.tsx
-// 简历预览组件（US-8）
-// 根据 templateId 选择 CSS 样式，渲染 name → contact → experience → projects → skills
-// 三种模板视觉差异：
-// - modern：简洁分隔线（border-bottom），灰色标题
-// - classic：色块标题条（背景色 + 白字），主题色 #1C487C
-// - tech：紧凑布局，技能以 inline 标签形式，主题色 #0F766E
+// 简历预览组件（US-8 + US-12 增强）
+// 渲染完整简历：个人信息 → 自我评价 → 工作经历 → 项目经历 → 技能 → 教育背景
+// 兼容两种数据源：
+// 1. AI 生成数据（扁平结构：name/email/phone 在顶层，skills 是对象）
+// 2. 上传解析数据（嵌套结构：basic.name/basic.phone，skills 是字符串数组，含 personal_info）
 
 interface ResumePreviewProps {
-  /** AI 生成的简历数据，null 时显示空状态 */
+  /** 简历数据（AI 生成或节点 content_json），null 时显示空状态 */
   resumeData: Record<string, unknown> | null;
   /** 当前模板 id，决定视觉风格 */
   templateId: string;
 }
 
-/** 各模板主题色（与后端 templates.py 对齐） */
 const THEME_COLORS: Record<string, string> = {
   modern: '#2563eb',
-  classic: '#1C487C',
+  classic: '#1C48C',
   tech: '#0F766E',
 };
 
 function getThemeColor(templateId: string): string {
-  return THEME_COLORS[templateId] ?? THEME_COLORS.modern;
+  return THEME_COLORS[templateId] ?? '#2563eb';
 }
 
-/** 安全读取字符串字段 */
 function asString(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
 
-/** 安全读取字符串数组 */
 function asStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.filter((v): v is string => typeof v === 'string');
 }
 
-/** 安全读取对象数组 */
 function asObjectArray(value: unknown): Array<Record<string, unknown>> {
   if (!Array.isArray(value)) return [];
   return value.filter(
@@ -44,7 +39,103 @@ function asObjectArray(value: unknown): Array<Record<string, unknown>> {
   );
 }
 
-/** 段落标题：根据模板渲染不同风格 */
+/** 从 resumeData 中提取姓名（兼容 basic.name / personal_info.contact.name / 顶层 name） */
+function extractName(data: Record<string, unknown>): string {
+  const basic = data.basic;
+  if (basic && typeof basic === 'object' && !Array.isArray(basic)) {
+    const name = asString((basic as Record<string, unknown>).name);
+    if (name) return name;
+  }
+  const pi = data.personal_info;
+  if (pi && typeof pi === 'object' && !Array.isArray(pi)) {
+    const contact = (pi as Record<string, unknown>).contact;
+    if (contact && typeof contact === 'object') {
+      const name = asString((contact as Record<string, unknown>).name);
+      if (name) return name;
+    }
+  }
+  return asString(data.name) || '简历';
+}
+
+/** 提取联系方式字符串列表 */
+function extractContactParts(data: Record<string, unknown>): string[] {
+  const parts: string[] = [];
+  const basic = data.basic;
+  const pi = data.personal_info;
+
+  // 优先从 personal_info.contact 读取
+  if (pi && typeof pi === 'object' && !Array.isArray(pi)) {
+    const contact = (pi as Record<string, unknown>).contact;
+    if (contact && typeof contact === 'object') {
+      const c = contact as Record<string, unknown>;
+      const phone = asString(c.phone);
+      const email = asString(c.email);
+      const location = asString(c.location);
+      if (phone) parts.push(phone);
+      if (email) parts.push(email);
+      if (location) parts.push(location);
+      const github = asString(c.github);
+      if (github) parts.push(github);
+    }
+  }
+
+  // fallback: basic
+  if (parts.length === 0 && basic && typeof basic === 'object') {
+    const b = basic as Record<string, unknown>;
+    const phone = asString(b.phone);
+    const email = asString(b.email);
+    if (phone) parts.push(phone);
+    if (email) parts.push(email);
+  }
+
+  // fallback: 顶层
+  if (parts.length === 0) {
+    const phone = asString(data.phone);
+    const email = asString(data.email);
+    if (phone) parts.push(phone);
+    if (email) parts.push(email);
+  }
+
+  return parts;
+}
+
+/** 提取自我评价 */
+function extractSummary(data: Record<string, unknown>): string {
+  const pi = data.personal_info;
+  if (pi && typeof pi === 'object' && !Array.isArray(pi)) {
+    const summary = asString((pi as Record<string, unknown>).summary);
+    if (summary) return summary;
+  }
+  return asString(data.summary);
+}
+
+/** 提取教育背景 */
+function extractEducation(data: Record<string, unknown>): Array<Record<string, unknown>> {
+  const pi = data.personal_info;
+  if (pi && typeof pi === 'object' && !Array.isArray(pi)) {
+    const edu = (pi as Record<string, unknown>).education;
+    const items = asObjectArray(edu);
+    if (items.length > 0) return items;
+  }
+  return asObjectArray(data.education);
+}
+
+/** 提取技能（兼容对象格式和字符串数组格式） */
+function extractSkills(data: Record<string, unknown>): {
+  isObject: boolean;
+  obj: Record<string, unknown>;
+  strArray: string[];
+} {
+  const skillsRaw = data.skills;
+  if (skillsRaw && typeof skillsRaw === 'object' && !Array.isArray(skillsRaw)) {
+    return { isObject: true, obj: skillsRaw as Record<string, unknown>, strArray: [] };
+  }
+  if (Array.isArray(skillsRaw)) {
+    return { isObject: false, obj: {}, strArray: asStringArray(skillsRaw) };
+  }
+  return { isObject: false, obj: {}, strArray: [] };
+}
+
 function SectionHeader({
   title,
   templateId,
@@ -55,7 +146,6 @@ function SectionHeader({
   themeColor: string;
 }) {
   if (templateId === 'classic') {
-    // classic: 色块标题条（背景色 + 白字）
     return (
       <div
         className="px-2 py-1.5 text-sm font-semibold text-white mt-4 mb-2 rounded-sm"
@@ -66,7 +156,6 @@ function SectionHeader({
     );
   }
   if (templateId === 'tech') {
-    // tech: 紧凑，主题色标题 + 分隔线
     return (
       <div
         className="text-sm font-semibold mt-3 mb-1.5 pb-1 border-b"
@@ -79,7 +168,6 @@ function SectionHeader({
       </div>
     );
   }
-  // modern: 灰色标题 + 浅灰分隔线
   return (
     <div className="text-sm font-semibold text-text-secondary mt-4 mb-2 pb-1 border-b border-border-subtle">
       {title}
@@ -87,7 +175,6 @@ function SectionHeader({
   );
 }
 
-/** 工作经历条目 */
 function ExperienceItem({
   exp,
   compact,
@@ -132,8 +219,7 @@ function ExperienceItem({
   );
 }
 
-/** 项目经历条目 */
-function ProjectItem({
+function ProjectItemView({
   proj,
   compact,
 }: {
@@ -182,95 +268,36 @@ function ProjectItem({
   );
 }
 
-/** 技能段落：tech 模板以 inline 标签形式展示，其余逐行展示 */
-function SkillsSection({
-  skills,
-  templateId,
-  themeColor,
+function EducationItemView({
+  edu,
+  compact,
 }: {
-  skills: Record<string, unknown>;
-  templateId: string;
-  themeColor: string;
+  edu: Record<string, unknown>;
+  compact: boolean;
 }) {
-  const categories = [
-    { key: 'tech_stack', label: '技术栈' },
-    { key: 'hard_skills', label: '硬技能' },
-    { key: 'soft_skills', label: '软技能' },
-  ];
+  const school = asString(edu.school);
+  const degree = asString(edu.degree);
+  const major = asString(edu.major);
+  const period = asString(edu.period);
 
-  const isEmpty = categories.every((cat) => {
-    const items = asObjectArray(skills[cat.key]);
-    return items.length === 0;
-  });
-  if (isEmpty) return null;
-
-  if (templateId === 'tech') {
-    // tech: inline 标签横排（背景色块）
-    return (
-      <div className="space-y-1.5">
-        {categories.map((cat) => {
-          const items = asObjectArray(skills[cat.key]);
-          if (items.length === 0) return null;
-          return (
-            <div key={cat.key}>
-              <span className="text-xs font-medium mr-1.5" style={{ color: themeColor }}>
-                {cat.label}:
-              </span>
-              {items.map((item, i) => {
-                const name = asString(item.name);
-                const context = asString(item.context);
-                const label = context ? `${name}（${context}）` : name;
-                return (
-                  <span
-                    key={i}
-                    className="inline-block text-[11px] px-1.5 py-0.5 rounded mr-1 mb-1 text-text-primary"
-                    style={{
-                      backgroundColor: `${themeColor}18`,
-                      color: themeColor,
-                    }}
-                  >
-                    {label}
-                  </span>
-                );
-              })}
-            </div>
-          );
-        })}
-      </div>
-    );
-  }
-
-  // modern / classic: 逐行展示
   return (
-    <div className="space-y-1.5">
-      {categories.map((cat) => {
-        const items = asObjectArray(skills[cat.key]);
-        if (items.length === 0) return null;
-        return (
-          <div key={cat.key}>
-            <div className="text-xs font-medium text-text-secondary mb-0.5">
-              {cat.label}
-            </div>
-            {items.map((item, i) => {
-              const name = asString(item.name);
-              const context = asString(item.context);
-              return (
-                <div key={i} className="text-xs text-text-secondary flex gap-1.5 leading-snug">
-                  <span className="text-text-muted flex-shrink-0">·</span>
-                  {context ? (
-                    <span>
-                      <span className="text-text-primary font-medium">{name}</span>
-                      <span className="text-text-tertiary">：{context}</span>
-                    </span>
-                  ) : (
-                    <span className="text-text-primary">{name}</span>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        );
-      })}
+    <div className={compact ? 'mb-1.5' : 'mb-2'}>
+      <div className="flex items-baseline justify-between">
+        <span className="text-sm font-medium text-text-primary">
+          {school}
+          {degree && (
+            <span className="text-text-tertiary font-normal ml-1">
+              | {degree}
+            </span>
+          )}
+        </span>
+        {period && (
+          <span className="text-[11px] text-text-muted">{period}</span>
+        )}
+      </div>
+      {major && (
+        <p className="text-xs text-text-secondary mt-0.5">{major}</p>
+      )}
     </div>
   );
 }
@@ -279,7 +306,6 @@ export default function ResumePreview({
   resumeData,
   templateId,
 }: ResumePreviewProps) {
-  // 空状态
   if (!resumeData) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-text-muted py-12">
@@ -301,20 +327,22 @@ export default function ResumePreview({
   const themeColor = getThemeColor(templateId);
   const compact = templateId === 'tech';
 
-  const name = asString(resumeData.name) || '简历';
-  const email = asString(resumeData.email);
-  const phone = asString(resumeData.phone);
+  const name = extractName(resumeData);
+  const contactParts = extractContactParts(resumeData);
+  const summary = extractSummary(resumeData);
   const experiences = asObjectArray(resumeData.experience);
   const projects = asObjectArray(resumeData.projects);
-  const skillsRaw = resumeData.skills;
-  const skills =
-    skillsRaw && typeof skillsRaw === 'object' && !Array.isArray(skillsRaw)
-      ? (skillsRaw as Record<string, unknown>)
-      : {};
+  const education = extractEducation(resumeData);
+  const { isObject: skillsIsObject, obj: skillsObj, strArray: skillsStrArray } =
+    extractSkills(resumeData);
 
-  const contactParts: string[] = [];
-  if (email) contactParts.push(email);
-  if (phone) contactParts.push(phone);
+  const hasContent =
+    summary ||
+    experiences.length > 0 ||
+    projects.length > 0 ||
+    education.length > 0 ||
+    skillsStrArray.length > 0 ||
+    (skillsIsObject && Object.keys(skillsObj).length > 0);
 
   return (
     <div
@@ -334,6 +362,20 @@ export default function ResumePreview({
         <div className="text-center text-xs text-text-tertiary mb-3">
           {contactParts.join(' | ')}
         </div>
+      )}
+
+      {/* 自我评价 */}
+      {summary && (
+        <section>
+          <SectionHeader
+            title="自我评价"
+            templateId={templateId}
+            themeColor={themeColor}
+          />
+          <p className="text-xs text-text-secondary leading-relaxed">
+            {summary}
+          </p>
+        </section>
       )}
 
       {/* 工作经历 */}
@@ -359,35 +401,98 @@ export default function ResumePreview({
             themeColor={themeColor}
           />
           {projects.map((proj, i) => (
-            <ProjectItem key={i} proj={proj} compact={compact} />
+            <ProjectItemView key={i} proj={proj} compact={compact} />
           ))}
         </section>
       )}
 
       {/* 技能 */}
-      {Object.keys(skills).length > 0 && (
+      {skillsIsObject && Object.keys(skillsObj).length > 0 && (
         <section>
           <SectionHeader
             title="技能"
             templateId={templateId}
             themeColor={themeColor}
           />
-          <SkillsSection
-            skills={skills}
+          {/* 对象格式技能 */}
+          <div className="space-y-1.5">
+            {[
+              { key: 'tech_stack', label: '技术栈' },
+              { key: 'hard_skills', label: '硬技能' },
+              { key: 'soft_skills', label: '软技能' },
+            ].map((cat) => {
+              const items = asObjectArray(skillsObj[cat.key]);
+              if (items.length === 0) return null;
+              return (
+                <div key={cat.key}>
+                  <div className="text-xs font-medium text-text-secondary mb-0.5">
+                    {cat.label}
+                  </div>
+                  {items.map((item, i) => {
+                    const sName = asString(item.name);
+                    const context = asString(item.context);
+                    return (
+                      <div key={i} className="text-xs text-text-secondary flex gap-1.5 leading-snug">
+                        <span className="text-text-muted flex-shrink-0">·</span>
+                        {context ? (
+                          <span>
+                            <span className="text-text-primary font-medium">{sName}</span>
+                            <span className="text-text-tertiary">：{context}</span>
+                          </span>
+                        ) : (
+                          <span className="text-text-primary">{sName}</span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      {/* 字符串数组格式技能 */}
+      {!skillsIsObject && skillsStrArray.length > 0 && (
+        <section>
+          <SectionHeader
+            title="技能"
             templateId={templateId}
             themeColor={themeColor}
           />
+          <div className="flex flex-wrap gap-1">
+            {skillsStrArray.map((skill, i) => (
+              <span
+                key={i}
+                className="text-[11px] px-1.5 py-0.5 rounded bg-bg-tertiary text-text-secondary"
+              >
+                {skill}
+              </span>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* 教育背景 */}
+      {education.length > 0 && (
+        <section>
+          <SectionHeader
+            title="教育背景"
+            templateId={templateId}
+            themeColor={themeColor}
+          />
+          {education.map((edu, i) => (
+            <EducationItemView key={i} edu={edu} compact={compact} />
+          ))}
         </section>
       )}
 
       {/* 全部段落为空时的提示 */}
-      {experiences.length === 0 &&
-        projects.length === 0 &&
-        Object.keys(skills).length === 0 && (
-          <div className="text-center text-sm text-text-muted py-8">
-            简历内容为空，请先生成各段落
-          </div>
-        )}
+      {!hasContent && (
+        <div className="text-center text-sm text-text-muted py-8">
+          简历内容为空，请先生成各段落
+        </div>
+      )}
     </div>
   );
 }

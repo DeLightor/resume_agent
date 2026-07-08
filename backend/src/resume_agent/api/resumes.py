@@ -2,10 +2,14 @@
 
 实现 US-1 资产冷启动的简历上传、解析、列表三个端点。
 对齐 design.md 第 3.1-3.3 节。
+
+US-12 增强：上传简历时同时将文本存入知识库，
+然后从知识库提取个人信息（向量搜索 + LLM），提高提取准确度。
 """
 
 from __future__ import annotations
 
+import json
 import uuid
 from pathlib import Path
 from typing import Any
@@ -20,6 +24,7 @@ from resume_agent.llm.client import LLMClient
 from resume_agent.parsers.docx_parser import extract_text_from_docx
 from resume_agent.parsers.extractor import ResumeExtractor
 from resume_agent.parsers.pdf_parser import extract_text_from_pdf
+from resume_agent.rag.chunker import chunk_text
 from resume_agent.services.tree_builder import TreeBuilder
 
 router = APIRouter(prefix="/resumes", tags=["resumes"])
@@ -44,16 +49,38 @@ def _get_file_ext(filename: str | None) -> str | None:
 def _extract_text(file_path: Path, file_type: str) -> str:
     """根据文件类型调用对应解析器提取纯文本。
 
+    优先使用 MinerU 云端解析（效果更好），未配置或失败时 fallback 到本地解析器。
+
     Args:
         file_path: 文件绝对路径。
         file_type: 文件扩展名（pdf / docx）。
 
     Returns:
-        提取的纯文本。
+        提取的纯文本（Markdown 或纯文本）。
 
     Raises:
         ValueError: 不支持的文件类型。
     """
+    # 优先使用 MinerU 云端解析（对复杂排版/图片/表格效果更好）
+    from resume_agent.config import settings
+
+    if settings.mineru_api_token:
+        try:
+            from resume_agent.parsers.mineru_client import MinerUClient, MinerUError
+
+            client = MinerUClient(
+                token=settings.mineru_api_token,
+                base_url=settings.mineru_api_base,
+            )
+            md_text = client.upload_and_parse(file_path)
+            if md_text and md_text.strip():
+                return md_text
+        except MinerUError:
+            pass  # fallback 到本地解析器
+        except Exception:  # noqa: BLE001
+            pass  # fallback 到本地解析器
+
+    # Fallback: 本地解析器
     if file_type == "pdf":
         return extract_text_from_pdf(file_path)
     if file_type == "docx":
@@ -159,13 +186,53 @@ async def parse_resume(req: ParseRequest) -> dict[str, Any]:
         _update_parse_status(req.upload_id, "needs_review")
         return error("PARSE_FAILED", f"文件解析失败: {exc}")
 
-    # 4. LLM 结构化提取
+    # 3.5 将简历文本存入知识库（US-12）
+    try:
+        chunk_count = _index_resume_to_knowledge(
+            raw_text,
+            record["file_name"],
+            req.upload_id,
+        )
+    except Exception:  # noqa: BLE001 - 知识库存入失败不阻断主流程
+        chunk_count = 0
+
+    # 4. LLM 结构化提取（experience/projects/skills 仍用 extractor）
     try:
         extractor = ResumeExtractor(llm_client)
         structured_resume = await extractor.extract(raw_text)
     except Exception as exc:  # noqa: BLE001 - LLM 提取失败需标记 needs_review
         _update_parse_status(req.upload_id, "needs_review")
         return error("EXTRACT_FAILED", f"LLM 结构化提取失败: {exc}")
+
+    # 4.5 从知识库提取个人信息（向量搜索 + LLM），覆盖 extractor 的 basic
+    personal_info_data = await _extract_personal_info_from_knowledge()
+    if personal_info_data:
+        # 用知识库提取的数据覆盖 structured_resume.basic
+        contact = personal_info_data.get("contact", {})
+        structured_resume.basic.name = contact.get("name") or structured_resume.basic.name
+        structured_resume.basic.gender = contact.get("gender") or structured_resume.basic.gender or None
+        structured_resume.basic.birth_date = contact.get("birth_date") or structured_resume.basic.birth_date or None
+        structured_resume.basic.phone = contact.get("phone") or structured_resume.basic.phone
+        structured_resume.basic.email = contact.get("email") or structured_resume.basic.email
+        structured_resume.basic.location = contact.get("location") or structured_resume.basic.location
+        structured_resume.basic.website = contact.get("website") or structured_resume.basic.website or None
+        structured_resume.basic.github = contact.get("github") or structured_resume.basic.github or None
+        structured_resume.basic.linkedin = contact.get("linkedin") or structured_resume.basic.linkedin or None
+
+        # 如果知识库提取到教育背景，也覆盖
+        edu_list = personal_info_data.get("education", [])
+        if edu_list and isinstance(edu_list, list):
+            from resume_agent.parsers.extractor import EducationItem
+            structured_resume.education = [
+                EducationItem(
+                    school=e.get("school", ""),
+                    degree=e.get("degree", ""),
+                    major=e.get("major", ""),
+                    period=e.get("period", ""),
+                )
+                for e in edu_list
+                if isinstance(e, dict)
+            ]
 
     # 5. 构建版本树节点
     try:
@@ -214,3 +281,155 @@ def _update_parse_status(upload_id: str, status: str) -> None:
             "UPDATE upload_records SET parse_status = ? WHERE id = ?",
             (status, upload_id),
         )
+
+
+def _index_resume_to_knowledge(
+    raw_text: str,
+    source_file_name: str,
+    upload_id: str,
+) -> int:
+    """将简历文本存入知识库（分块 + 嵌入 + 写入 Chroma + SQLite）。
+
+    Args:
+        raw_text: 简历纯文本。
+        source_file_name: 源文件名（用于 metadata）。
+        upload_id: 上传记录 ID（用于关联）。
+
+    Returns:
+        分块数量。
+    """
+    from resume_agent.rag.chroma_client import get_knowledge_collection
+
+    chunks = chunk_text(raw_text)
+    if not chunks:
+        return 0
+
+    collection = get_knowledge_collection()
+    chunk_ids: list[str] = []
+    chunk_documents: list[str] = []
+    chunk_metadatas: list[dict[str, Any]] = []
+    sqlite_rows: list[tuple[str, str, str, str, str]] = []
+    total = len(chunks)
+
+    for idx, chunk_text_content in enumerate(chunks):
+        embedding_id = str(uuid.uuid4())
+        chunk_id = str(uuid.uuid4())
+        meta = {
+            "upload_id": upload_id,
+            "source_file": source_file_name,
+            "file_type": "resume",
+            "chunk_index": idx,
+            "total_chunks": total,
+        }
+        chunk_ids.append(embedding_id)
+        chunk_documents.append(chunk_text_content)
+        chunk_metadatas.append(meta)
+        sqlite_rows.append(
+            (
+                chunk_id,
+                source_file_name,
+                chunk_text_content,
+                embedding_id,
+                json.dumps(meta, ensure_ascii=False),
+            )
+        )
+
+    # Chroma 写入
+    collection.add(
+        ids=chunk_ids,
+        documents=chunk_documents,
+        metadatas=chunk_metadatas,
+    )
+
+    # SQLite 写入
+    with get_connection() as conn:
+        conn.executemany(
+            """
+            INSERT INTO knowledge_chunks
+                (id, source_file, chunk_text, embedding_id, metadata_json)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            sqlite_rows,
+        )
+
+    return len(chunks)
+
+
+async def _extract_personal_info_from_knowledge() -> dict[str, Any] | None:
+    """从知识库向量搜索 + LLM 提取个人信息。
+
+    Returns:
+        PersonalInfo dict 或 None（提取失败）。
+    """
+    from resume_agent.rag.chroma_client import get_knowledge_collection
+
+    collection = get_knowledge_collection()
+
+    # 1. 向量搜索个人信息相关文本
+    search_queries = ["姓名 电话 邮箱 地址", "教育背景 学校 学历", "个人简介 自我介绍"]
+    all_chunks: list[str] = []
+    seen_ids: set[str] = set()
+
+    for query in search_queries:
+        try:
+            result = collection.query(query_texts=[query], n_results=3)
+            ids = result.get("ids", [[]])[0]
+            documents = result.get("documents", [[]])[0]
+            for idx, doc in enumerate(documents):
+                chunk_id = ids[idx] if idx < len(ids) else ""
+                if chunk_id and chunk_id not in seen_ids:
+                    seen_ids.add(chunk_id)
+                    all_chunks.append(doc)
+        except Exception:  # noqa: BLE001
+            continue
+
+    if not all_chunks:
+        return None
+
+    # 2. LLM 提取
+    llm = LLMClient()
+    if not llm.configured:
+        return None
+
+    context = "\n---\n".join(all_chunks[:5])
+    system_prompt = """你是信息提取助手。从给定的文本片段中提取个人信息，输出 JSON 对象。
+提取以下字段（找不到的留空）：
+{
+  "contact": { "name": "", "gender": "", "birth_date": "", "phone": "", "email": "", "location": "", "website": "", "github": "", "linkedin": "" },
+  "education": [ { "school": "", "degree": "", "major": "", "period": "" } ],
+  "summary": ""
+}
+只输出 JSON，不要输出其他内容。"""
+
+    user_prompt = f"请从以下文本中提取个人信息：\n\n{context}"
+
+    try:
+        response = await llm.chat(
+            system_prompt=system_prompt,
+            user_content=user_prompt,
+            response_format_json=True,
+        )
+    except Exception:  # noqa: BLE001
+        return None
+
+    # 3. 解析返回
+    cleaned = response.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.lstrip("`")
+        if cleaned.lower().startswith("json"):
+            cleaned = cleaned[4:]
+        cleaned = cleaned.strip()
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3].strip()
+
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        first = cleaned.find("{")
+        last = cleaned.rfind("}")
+        if first != -1 and last != -1 and last > first:
+            try:
+                return json.loads(cleaned[first : last + 1])
+            except json.JSONDecodeError:
+                return None
+        return None

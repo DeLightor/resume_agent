@@ -25,8 +25,10 @@ export default function MainLayout() {
   >(null);
   // US-8：当前选中的模板 id（默认 modern）
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('modern');
-  // US-10：版本树节点列表（供 Diff 选择器和保存功能使用）
+  // 版本树节点列表（供 Diff 选择器和保存功能使用）
   const [treeNodes, setTreeNodes] = useState<ResumeNode[]>([]);
+  // US-12：当前选中的节点 ID（传给左栏 PersonalInfoForm）
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
   const handleTreeRefresh = useCallback(() => {
     setTreeRefreshKey((k) => k + 1);
@@ -68,6 +70,7 @@ export default function MainLayout() {
         onKnowledgeRefresh={handleKnowledgeRefresh}
         knowledgeRefreshKey={knowledgeRefreshKey}
         onNavigate={handleNavigate}
+        selectedNodeId={selectedNodeId}
       />
       <CenterPanel
         activeView={activeView}
@@ -79,6 +82,7 @@ export default function MainLayout() {
         templateId={selectedTemplateId}
         onTemplateSelect={handleTemplateSelect}
         onTreeNodesUpdate={handleTreeNodesUpdate}
+        onNodeSelect={setSelectedNodeId}
       />
       {/* 右栏始终可见：JD 截图分析 / Gap 报告 / AI 导师均在此栏，
           无需随导航项切换（"职位截图分析"等导航仅影响中栏视图） */}
