@@ -160,11 +160,12 @@ Write-Host ""
 # Frontend dependencies
 Write-InfoMsg "Installing frontend dependencies (pnpm install)..."
 Set-Location "$ScriptDir\frontend"
-try { pnpm install 2>&1 | Out-Null } catch {}
-if (Test-Path "node_modules") {
+pnpm install
+if ($LASTEXITCODE -eq 0 -or (Test-Path "node_modules")) {
     Write-OkMsg "Frontend dependencies installed"
 } else {
-    Write-FailMsg "Frontend dependency install failed"
+    Write-FailMsg "Frontend dependency install failed (see output above)"
+    Set-Location $ScriptDir
     exit 1
 }
 Set-Location $ScriptDir
