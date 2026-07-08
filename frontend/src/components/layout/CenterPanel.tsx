@@ -14,7 +14,8 @@ import TemplateSelector from '@/components/template/TemplateSelector';
 import ResumePreview from '@/components/template/ResumePreview';
 import DiffView from '@/components/diff/DiffView';
 import CompletenessBar from '@/components/completeness/CompletenessBar';
-import { getTemplates, getTree, deleteNode, generateFull, regenerateSection, updateSection } from '@/lib/api';
+import { getTemplates, getTree, deleteNode, generateFull, regenerateSection, updateSection, getUpstreamChanges, mergeAll } from '@/lib/api';
+import type { UpstreamChanges } from '@/lib/api';
 import type { ResumeNode, TreeData } from '@/types/tree';
 import type { ActiveView } from '@/types/knowledge';
 import type { TemplateInfo } from '@/types/template';
@@ -93,6 +94,9 @@ export default function CenterPanel({
   const [activeTab, setActiveTab] = useState<string>('版本树');
   const [selectedNode, setSelectedNode] = useState<ResumeNode | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  // US-17: 上游变更
+  const [upstreamChanges, setUpstreamChanges] = useState<UpstreamChanges | null>(null);
+  const [showUpstreamPanel, setShowUpstreamPanel] = useState(false);
   // 树数据由 VersionTree onTreeLoad 回灌，用于路径回溯与新建节点父选项
   const [tree, setTree] = useState<TreeData | null>(null);
   // US-8：模板列表（从 API 获取，失败时用 fallback）
@@ -118,7 +122,43 @@ export default function CenterPanel({
   const handleNodeSelect = useCallback((node: ResumeNode) => {
     setSelectedNode(node);
     onNodeSelect?.(node.node_id);
+    setShowUpstreamPanel(false);
   }, [onNodeSelect]);
+
+  // US-17: 选中节点时拉取上游变更状态
+  useEffect(() => {
+    if (!selectedNode?.has_upstream_update) {
+      setUpstreamChanges(null);
+      return;
+    }
+    let cancelled = false;
+    getUpstreamChanges(selectedNode.node_id)
+      .then((data) => {
+        if (!cancelled) setUpstreamChanges(data);
+      })
+      .catch(() => {
+        if (!cancelled) setUpstreamChanges(null);
+      });
+    return () => { cancelled = true; };
+  }, [selectedNode]);
+
+  // US-17: 全部接受合并
+  const handleMergeAll = useCallback(async () => {
+    if (!selectedNode) return;
+    try {
+      await mergeAll(selectedNode.node_id);
+      setUpstreamChanges(null);
+      setShowUpstreamPanel(false);
+      // 刷新节点数据
+      const data = await getTree();
+      setTree(data);
+      const updated = data.nodes.find((n) => n.node_id === selectedNode.node_id);
+      if (updated) setSelectedNode(updated);
+      onTreeNodesUpdate?.(data.nodes);
+    } catch {
+      // 静默失败
+    }
+  }, [selectedNode, onTreeNodesUpdate]);
 
   // US-13: section_order 更新后重新拉取选中节点的 content_json
   useEffect(() => {
@@ -297,6 +337,96 @@ export default function CenterPanel({
       {activeTab === '编辑器' ? (
         // US-8：编辑器 Tab = 模板选择器 + 工具栏 + 简历预览
         <div className="flex-1 flex flex-col overflow-hidden">
+          {/* US-17: 上游变更提示 + 展开面板 */}
+          {upstreamChanges?.has_upstream_update && (
+            <div className="border-b border-orange-200 bg-orange-50">
+              {/* 提示条 */}
+              <div className="px-4 py-2 flex items-center gap-2">
+                <span className="w-2 h-2 bg-orange-500 rounded-full flex-shrink-0 animate-pulse" />
+                <span className="text-xs text-orange-700">
+                  上游有 {upstreamChanges.count} 项个人信息变更待合并
+                </span>
+                <button
+                  onClick={() => setShowUpstreamPanel(!showUpstreamPanel)}
+                  className="text-xs text-orange-600 hover:underline ml-auto"
+                >
+                  {showUpstreamPanel ? '收起 ▲' : '查看变更 ▼'}
+                </button>
+              </div>
+              {/* 展开的变更列表 */}
+              {showUpstreamPanel && (
+                <div className="px-4 pb-3 space-y-2">
+                  {Object.entries(upstreamChanges.changes).map(([field, change]) => {
+                    const fieldLabel = field === 'contact' ? '联系方式' : field === 'education' ? '教育背景' : field === 'summary' ? '自我评价' : field;
+                    const oldVal = change.old;
+                    const newVal = change.new;
+
+                    // 对象类型（contact / education）：字段级表格渲染
+                    const isObject = (v: unknown) => v !== null && typeof v === 'object';
+                    const isObjectDiff = isObject(oldVal) || isObject(newVal);
+                    const oldObj = (oldVal && typeof oldVal === 'object' ? oldVal : {}) as Record<string, unknown>;
+                    const newObj = (newVal && typeof newVal === 'object' ? newVal : {}) as Record<string, unknown>;
+                    const allKeys = Array.from(new Set([...Object.keys(oldObj), ...Object.keys(newObj)]));
+
+                    // 字段名中文映射
+                    const fieldNames: Record<string, string> = {
+                      name: '姓名', gender: '性别', birth_date: '出生年月', phone: '电话',
+                      email: '邮箱', location: '所在城市', website: '个人网站',
+                      github: 'GitHub', linkedin: 'LinkedIn',
+                      school: '学校', degree: '学历', major: '专业', start_date: '开始', end_date: '结束',
+                    };
+
+                    return (
+                      <div key={field} className="bg-white rounded-md border border-orange-200 p-2.5 space-y-1.5">
+                        <div className="text-xs font-medium text-text-primary">{fieldLabel}</div>
+                        {isObjectDiff ? (
+                          <div className="space-y-0.5">
+                            {allKeys.map((key) => {
+                              const ov = oldObj[key];
+                              const nv = newObj[key];
+                              const changed = JSON.stringify(ov) !== JSON.stringify(nv);
+                              return (
+                                <div key={key} className={`flex items-center gap-2 px-2 py-0.5 rounded-sm text-xs ${changed ? 'bg-orange-50' : ''}`}>
+                                  <span className="text-text-muted w-16 flex-shrink-0">{fieldNames[key] ?? key}</span>
+                                  {changed ? (
+                                    <>
+                                      <span className="text-error line-through flex-1">{String(ov ?? '')}</span>
+                                      <span className="text-text-muted">→</span>
+                                      <span className="text-success flex-1">{String(nv ?? '')}</span>
+                                    </>
+                                  ) : (
+                                    <span className="text-text-tertiary flex-1">{String(nv ?? '')}</span>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <div className="flex items-start gap-2">
+                            <div className="flex-1">
+                              <span className="text-[10px] text-error mr-1">旧:</span>
+                              <span className="text-xs text-text-tertiary line-through">{String(oldVal ?? '')}</span>
+                            </div>
+                            <span className="text-text-muted text-xs">→</span>
+                            <div className="flex-1">
+                              <span className="text-[10px] text-success mr-1">新:</span>
+                              <span className="text-xs text-text-primary">{String(newVal ?? '')}</span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                  <button
+                    onClick={handleMergeAll}
+                    className="w-full py-2 text-xs font-medium text-white bg-orange-500 hover:bg-orange-600 rounded-md transition-colors"
+                  >
+                    全部接受合并
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
           <div className="p-3 border-b border-border-subtle">
             <TemplateSelector
               templates={templates}

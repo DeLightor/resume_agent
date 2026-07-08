@@ -12,6 +12,8 @@ export interface ResumeNode {
   direction?: string | null;
   /** 节点结构化简历内容（GET /api/tree/{node_id} 返回时填充） */
   content_json?: Record<string, unknown> | null;
+  /** US-17: 是否有上游 personal_info 变更待合并 */
+  has_upstream_update?: boolean;
 }
 
 export interface TreeEdge {

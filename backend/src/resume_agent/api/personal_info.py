@@ -157,6 +157,14 @@ async def update_personal_info(
     if not _save_node_content(node_id, content):
         return error("UPDATE_FAILED", "保存个人信息失败")
 
+    # US-17: 触发上游变更传播到子节点
+    try:
+        from resume_agent.api.upstream import propagate_upstream_changes
+        marked = propagate_upstream_changes(node_id)
+        logger.info("upstream propagation: marked %d children from %s", marked, node_id)
+    except Exception as exc:
+        logger.warning("upstream propagation failed: %s", exc)
+
     return success({"personal_info": info.model_dump()})
 
 

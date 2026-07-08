@@ -109,6 +109,7 @@ def _row_to_node(row: dict[str, Any]) -> dict[str, Any]:
         "company": row["company"],
         "direction": row["direction"],
         "content_json": content,
+        "has_upstream_update": bool(row["has_upstream_update"]) if "has_upstream_update" in row.keys() else False,
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -128,7 +129,7 @@ def get_tree() -> dict[str, Any]:
         rows = conn.execute(
             """
             SELECT id, node_id, parent_id, node_type, title, company, direction,
-                   content_json, created_at, updated_at
+                   content_json, has_upstream_update, created_at, updated_at
             FROM resume_versions
             ORDER BY created_at, node_id
             """

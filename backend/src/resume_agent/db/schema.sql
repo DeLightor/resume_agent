@@ -20,6 +20,10 @@ CREATE TABLE IF NOT EXISTS resume_versions (
     -- 简历内容（JSON Schema 规范化的结构化简历）
     content_json    TEXT,                      -- JSON: {basic, education, experience, projects, skills}
 
+    -- US-17: 上游变更检测
+    has_upstream_update  INTEGER DEFAULT 0,    -- 0/1: 是否有上游 personal_info 变更待合并
+    upstream_changes     TEXT,                 -- JSON: {field: {old, new}} 变更详情
+
     -- 时间戳
     created_at      TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at      TEXT NOT NULL DEFAULT (datetime('now')),

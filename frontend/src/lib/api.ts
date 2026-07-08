@@ -461,3 +461,26 @@ export async function updateSection(
 ): Promise<void> {
   await api.put(`/tree/node/${nodeId}/section`, { section, data });
 }
+
+// === US-17: 上游变更检测 ===
+
+export interface UpstreamChanges {
+  has_upstream_update: boolean;
+  changes: Record<string, { old: unknown; new: unknown }>;
+  count: number;
+}
+
+export async function getUpstreamChanges(nodeId: string): Promise<UpstreamChanges> {
+  const res = await api.get<UpstreamChanges>(`/tree/node/${nodeId}/upstream-changes`);
+  return res;
+}
+
+export async function mergeField(nodeId: string, field: string): Promise<{ merged: boolean; remaining_changes: number }> {
+  const res = await api.post<{ merged: boolean; remaining_changes: number }>(`/tree/node/${nodeId}/merge`, { field });
+  return res;
+}
+
+export async function mergeAll(nodeId: string): Promise<{ merged_count: number; all_merged: boolean }> {
+  const res = await api.post<{ merged_count: number; all_merged: boolean }>(`/tree/node/${nodeId}/merge/all`);
+  return res;
+}

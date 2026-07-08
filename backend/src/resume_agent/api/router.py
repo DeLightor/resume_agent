@@ -23,6 +23,7 @@ from resume_agent.api import (
     templates,
     tree,
     tutor,
+    upstream,
 )
 
 api_router = APIRouter()
@@ -45,6 +46,7 @@ api_router.include_router(tutor.router)
 api_router.include_router(personal_info.router)
 api_router.include_router(section_order.router)
 api_router.include_router(completeness.router)
+api_router.include_router(upstream.router)
 
 
 __all__ = ["api_router"]

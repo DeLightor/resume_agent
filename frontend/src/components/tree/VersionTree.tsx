@@ -63,7 +63,7 @@ function toFlowNode(n: ResumeNode, position: { x: number; y: number }): Node {
   if (n.node_type === 'branch') {
     return {
       ...base,
-      data: { label: n.title, direction: n.direction ?? '' } as BranchNodeData,
+      data: { label: n.title, direction: n.direction ?? '', has_upstream_update: n.has_upstream_update ?? false } as BranchNodeData,
     };
   }
   // company: title 形如 "Tencent 安全研究员"
@@ -74,6 +74,7 @@ function toFlowNode(n: ResumeNode, position: { x: number; y: number }): Node {
       label: n.title,
       company: company,
       role: rest.join(' '),
+      has_upstream_update: n.has_upstream_update ?? false,
     } as CompanyNodeData,
   };
 }

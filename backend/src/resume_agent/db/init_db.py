@@ -43,7 +43,24 @@ def init_database(db_path: Path | str | None = None) -> None:
     schema_sql = _load_schema_sql()
     with get_connection(path) as conn:
         conn.executescript(schema_sql)
+        _migrate_upstream_columns(conn)
         _seed_master_node(conn)
+
+
+def _migrate_upstream_columns(conn: sqlite3.Connection) -> None:
+    """US-17: 幂等添加 has_upstream_update 和 upstream_changes 列。
+
+    ALTER TABLE ADD COLUMN 在列已存在时会报错，需捕获并忽略。
+    """
+    for col_def in [
+        "has_upstream_update INTEGER DEFAULT 0",
+        "upstream_changes TEXT",
+    ]:
+        col_name = col_def.split()[0]
+        try:
+            conn.execute(f"ALTER TABLE resume_versions ADD COLUMN {col_def}")
+        except sqlite3.OperationalError:
+            pass  # 列已存在
 
 
 def _seed_master_node(conn: sqlite3.Connection) -> None:
