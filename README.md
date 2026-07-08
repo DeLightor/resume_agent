@@ -33,13 +33,13 @@ make dev        # 启动开发服务器
 
 ## 前置要求
 
-| 工具 | 版本 | 安装方式 |
-|------|------|----------|
-| Node.js | ≥ 20 | [nodejs.org](https://nodejs.org/) |
-| pnpm | ≥ 9 | `npm install -g pnpm` |
-| Python | ≥ 3.10 | [python.org](https://python.org/) |
-| uv | latest | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
-| Docker | ≥ 24（可选） | [docker.com](https://docker.com/) |
+| 工具 | 版本 | macOS / Linux | Windows |
+|------|------|---------------|---------|
+| Node.js | ≥ 20 | [nodejs.org](https://nodejs.org/) | [nodejs.org](https://nodejs.org/) |
+| pnpm | ≥ 9 | `npm install -g pnpm` | `npm install -g pnpm` |
+| Python | ≥ 3.10 | [python.org](https://python.org/) | [python.org](https://python.org/) |
+| uv | latest | `curl -LsSf https://astral.sh/uv/install.sh \| sh` | `powershell -c "irm https://astral.sh/uv/install.ps1 \| iex"` |
+| Docker | ≥ 24（可选） | [docker.com](https://docker.com/) | [docker.com](https://docker.com/) |
 
 ## 快速安装
 
@@ -49,22 +49,23 @@ make dev        # 启动开发服务器
 ./install.sh
 ```
 
-脚本会自动检测环境、安装依赖、引导配置 LLM API Key。
+脚本会自动检测环境、安装依赖、引导配置 LLM API Key 和 MinerU Token。
 
 ### Windows
 
 ```powershell
-# 一键安装
+# 一键安装（检测环境 + 安装依赖 + 配置 LLM + MinerU）
 powershell -ExecutionPolicy Bypass -File install.ps1
 
-# 日常开发命令（Makefile.ps1 等效 macOS Makefile）
-powershell -ExecutionPolicy Bypass -File Makefile.ps1 install    # 安装依赖
+# 日常开发命令
 powershell -ExecutionPolicy Bypass -File Makefile.ps1 dev        # 启动开发服务器
 powershell -ExecutionPolicy Bypass -File Makefile.ps1 test       # 运行测试
 powershell -ExecutionPolicy Bypass -File Makefile.ps1 build      # 构建前端
-powershell -ExecutionPolicy Bypass -File Makefile.ps1 lint       # 代码检查
-powershell -ExecutionPolicy Bypass -File Makefile.ps1 clean      # 清理构建产物
+powershell -ExecutionPolicy Bypass -File Makefile.ps1 install     # 安装依赖
+powershell -ExecutionPolicy Bypass -File Makefile.ps1 clean       # 清理构建产物
 ```
+
+> **注意**：Windows 上不要直接 `.\Makefile.ps1 dev`，会被记事本打开。必须用 `powershell -ExecutionPolicy Bypass -File` 执行。
 
 Windows 数据存储路径：`%USERPROFILE%\.resume-agent\`（自动创建）
 
@@ -78,27 +79,27 @@ docker compose up
 
 ## 配置
 
-复制 `.env.example` 为 `.env` 并填入以下配置：
+复制 `.env.example` 为 `.env` 并填入以下配置（或运行安装脚本自动引导）：
 
 ### LLM 配置（必需）
 
 ```bash
 LLM_PROVIDER=deepseek              # openai / deepseek / custom
 LLM_API_KEY=sk-xxxxxxxx             # API Key
-LLM_BASE_URL=https://api.deepseek.com  # OpenAI 兼容端点
-LLM_MODEL=deepseek-chat             # 模型名
+LLM_BASE_URL=https://api.deepseek.com  # OpenAI 兼容端点（不带 /v1）
+LLM_MODEL=deepseek-v4-pro           # 模型名
 ```
 
 支持任何 OpenAI 协议兼容的 LLM 服务（DeepSeek、OpenAI、Moonshot、本地 Ollama 等）。
 
-### MinerU 配置（JD 截图分析，可选）
+### MinerU 配置（简历解析必需）
 
 ```bash
 MINERU_API_TOKEN=                   # 在 https://mineru.net/apiManage 获取
 MINERU_API_BASE=https://mineru.net
 ```
 
-MinerU 提供云端文档解析 API，用于 JD 截图 OCR。有免费额度，无需自建部署。
+MinerU 提供云端文档解析 API，用于简历上传解析和 JD 截图 OCR。有免费额度，无需自建部署。
 
 ### Tavily 配置（AI 导师学习建议，可选）
 
@@ -126,7 +127,7 @@ FILES_ROOT=~/.resume-agent/files
 | 层 | 技术 |
 |----|------|
 | 前端 | React 18 + Vite + TypeScript + Tailwind CSS v4 + React Flow v12 |
-| 后端 | Python 3.12 + FastAPI + uvicorn |
+| 后端 | Python 3.10+ + FastAPI + uvicorn |
 | 数据库 | SQLite（元数据）+ Chroma（向量库，嵌入式，all-MiniLM-L6-v2） |
 | LLM | DeepSeek / OpenAI 兼容协议（结构化提取、反思审核、简历生成、导师建议） |
 | OCR | MinerU 云端 API（JD 截图解析，支持 PDF/图片/DOCX） |
@@ -166,13 +167,22 @@ FILES_ROOT=~/.resume-agent/files
 | 信息完整性检测 | 0-100 评分 + 8 项检查清单，缺失字段高亮，可编辑预览（内联编辑 + 增删条目） |
 | 6 套模板系统 | modern/classic/tech/minimal/暖橙卡片风/academic，配置化 TemplateConfig，半透明圆角背景框 |
 
+### v1.3 上游变更与跨平台
+
+| 功能 | 说明 |
+|------|------|
+| 上游变更检测 | 修改 master 个人信息后，子节点自动标记橙色徽标，提示有变更待合并 |
+| 选择性合并 Diff | 逐字段 diff 渲染（中文字段名 + 旧值删除线 → 新值高亮），逐条接受/拒绝或全部接受 |
+| 一键安装脚本 | macOS/Linux `install.sh` + Windows `install.ps1`，环境检测 + 依赖安装 + LLM/MinerU 配置引导 |
+| Windows 原生支持 | `Makefile.ps1` 等效 Makefile（dev/build/test/lint/clean），PowerShell 跨平台脚本 |
+
 ## 项目结构
 
 ```
 resume-agent/
 ├── backend/              # Python 后端
 │   ├── src/resume_agent/
-│   │   ├── api/          # FastAPI 路由（tree/knowledge/jd/gap_report/generate/export/diff/suggest/tutor/templates/completeness）
+│   │   ├── api/          # FastAPI 路由（tree/knowledge/jd/gap_report/generate/export/diff/suggest/tutor/templates/completeness/upstream）
 │   │   ├── db/           # SQLite + 建表脚本
 │   │   ├── rag/          # Chroma 向量库 + 文本分块
 │   │   ├── parsers/      # MinerU 文档解析客户端
@@ -181,7 +191,7 @@ resume-agent/
 │   │   ├── export/       # PDF 生成（reportlab，多模板）
 │   │   ├── config.py     # 环境变量配置
 │   │   └── main.py       # FastAPI 入口
-│   └── tests/            # pytest 测试（42 tests）
+│   └── tests/            # pytest 测试（75+ tests）
 ├── frontend/             # React 前端
 │   ├── src/
 │   │   ├── components/   # 组件（layout/tree/knowledge/jd/gap/generate/diff/tutor/template）
@@ -193,10 +203,15 @@ resume-agent/
 ├── docker-compose.yml
 ├── Dockerfile
 ├── Makefile
+├── Makefile.ps1          # Windows PowerShell Makefile
+├── install.sh            # macOS/Linux 安装脚本
+├── install.ps1           # Windows 安装脚本
 └── .env.example
 ```
 
 ## 开发命令
+
+### macOS / Linux
 
 ```bash
 make install    # 安装依赖
@@ -208,9 +223,17 @@ make docker-build  # Docker 构建
 make docker-up     # Docker 启动
 ```
 
+### Windows
+
+```powershell
+powershell -ExecutionPolicy Bypass -File Makefile.ps1 dev
+powershell -ExecutionPolicy Bypass -File Makefile.ps1 test
+powershell -ExecutionPolicy Bypass -File Makefile.ps1 build
+```
+
 ## 数据存储
 
-所有数据默认存储在 `~/.resume-agent/`：
+所有数据默认存储在 `~/.resume-agent/`（Windows 为 `%USERPROFILE%\.resume-agent\`）：
 
 ```
 ~/.resume-agent/
@@ -218,6 +241,48 @@ make docker-up     # Docker 启动
 ├── chroma/          # Chroma 向量索引（all-MiniLM-L6-v2）
 └── files/           # 上传的原始文件 + 导出的 PDF
 ```
+
+## Windows 常见问题
+
+<details>
+<summary>Q: 运行 <code>.\Makefile.ps1 dev</code> 弹出了记事本</summary>
+
+Windows 默认用记事本打开 `.ps1` 文件。必须用 `powershell -ExecutionPolicy Bypass -File` 执行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File Makefile.ps1 dev
+```
+</details>
+
+<details>
+<summary>Q: <code>pnpm install</code> 报 <code>packages field missing</code></summary>
+
+确保 `frontend/` 目录下没有 `pnpm-workspace.yaml` 文件。如果存在，删除它：
+
+```powershell
+del frontend\pnpm-workspace.yaml
+```
+</details>
+
+<details>
+<summary>Q: 后端启动正常，但前端显示"LLM 未配置"</summary>
+
+后端从项目根目录读取 `.env` 文件。确保 `.env` 在项目根目录（不是 `backend/` 目录），且 `LLM_API_KEY` 有值：
+
+```powershell
+# 查看 .env 内容
+cat .env
+
+# 如果缺失，重新运行安装脚本
+powershell -ExecutionPolicy Bypass -File install.ps1
+```
+</details>
+
+<details>
+<summary>Q: Docker 显示已安装但报错</summary>
+
+Docker Desktop 未运行。启动 Docker Desktop 后重试，或忽略此警告（不影响本地开发）。
+</details>
 
 ## License
 
