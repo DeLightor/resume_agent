@@ -1,8 +1,9 @@
 // frontend/src/components/template/TemplateSelector.tsx
-// 模板选择器（US-8）
-// 卡片式横向列表，每张卡片显示：模板名 + 主题色圆点 + 描述
+// 模板选择器（US-8 + US-16）
+// 卡片式网格布局，每张卡片显示：模板名 + 主题色圆点 + 描述
 // 选中态：边框变为主题色 + 背景轻微着色
 // 未选中态：灰色边框 hover 变色
+// US-16: 支持 6 套模板，3 列网格
 
 import type { TemplateInfo } from '@/types/template';
 
@@ -21,7 +22,7 @@ export default function TemplateSelector({
   onSelect,
 }: TemplateSelectorProps) {
   return (
-    <div className="flex gap-2 overflow-x-auto">
+    <div className="grid grid-cols-3 gap-2">
       {templates.map((tpl) => {
         const selected = tpl.id === selectedId;
         return (
@@ -29,7 +30,7 @@ export default function TemplateSelector({
             key={tpl.id}
             type="button"
             onClick={() => onSelect(tpl.id)}
-            className="flex-shrink-0 w-44 text-left rounded-md border p-2.5 cursor-pointer transition-all font-body"
+            className="text-left rounded-md border p-2.5 cursor-pointer transition-all font-body"
             style={{
               borderColor: selected ? tpl.theme_color : 'var(--color-border-default)',
               backgroundColor: selected

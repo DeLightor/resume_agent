@@ -27,6 +27,9 @@ const THEME_COLORS: Record<string, string> = {
   modern: '#2563eb',
   classic: '#1C487C',
   tech: '#0F766E',
+  minimal: '#333333',
+  two_column: '#EA580C',
+  academic: '#1a1a1a',
 };
 
 function getThemeColor(templateId: string): string {
@@ -323,32 +326,76 @@ function SectionHeader({
   templateId: string;
   themeColor: string;
 }) {
+  // classic: 色块标题条 + 白字 + 左侧色条
   if (templateId === 'classic') {
     return (
       <div
-        className="px-2 py-1.5 text-sm font-semibold text-white mt-4 mb-2 rounded-sm"
+        className="px-3 py-2 text-sm font-semibold text-white mt-4 mb-2 rounded-sm flex items-center gap-2"
         style={{ backgroundColor: themeColor }}
       >
+        <span className="w-1 h-4 bg-white/40 rounded-sm" />
         {title}
       </div>
     );
   }
+  // tech: 紧凑 + 主题色 + 左侧竖条 + 浅色背景
   if (templateId === 'tech') {
     return (
       <div
-        className="text-sm font-semibold mt-3 mb-1.5 pb-1 border-b"
+        className="text-sm font-semibold mt-3 mb-1.5 px-2 py-1 rounded-sm flex items-center gap-2"
         style={{
           color: themeColor,
-          borderBottomColor: `${themeColor}40`,
+          backgroundColor: `${themeColor}10`,
         }}
       >
+        <span className="w-1 h-3.5 rounded-sm" style={{ backgroundColor: themeColor }} />
         {title}
       </div>
     );
   }
+  // minimal: 细线 + 大写 + 宽间距
+  if (templateId === 'minimal') {
+    return (
+      <div className="flex items-center gap-3 mt-6 mb-2">
+        <span className="text-xs font-semibold text-text-secondary uppercase tracking-widest">
+          {title}
+        </span>
+        <span className="flex-1 h-px bg-gray-200" />
+      </div>
+    );
+  }
+  // academic: 居中 + 衬线 + 双横线
+  if (templateId === 'academic') {
+    return (
+      <div className="mt-4 mb-2">
+        <div className="text-center text-sm font-semibold text-text-primary" style={{ fontFamily: "'Times New Roman', 'Noto Serif SC', serif" }}>
+          {title}
+        </div>
+        <div className="border-b border-gray-300 mt-1" />
+      </div>
+    );
+  }
+  // two_column → 暖橙卡片风: 圆角标题 + 左侧色点
+  if (templateId === 'two_column') {
+    return (
+      <div
+        className="text-sm font-semibold mt-3 mb-2 px-3 py-1.5 rounded-lg inline-flex items-center gap-2"
+        style={{ backgroundColor: `${themeColor}15`, color: themeColor }}
+      >
+        <span className="w-2 h-2 rounded-full" style={{ backgroundColor: themeColor }} />
+        {title}
+      </div>
+    );
+  }
+  // modern: 主题色文字 + 底部渐变线
   return (
-    <div className="text-sm font-semibold text-text-secondary mt-4 mb-2 pb-1 border-b border-border-subtle">
-      {title}
+    <div className="mt-4 mb-2">
+      <div
+        className="text-sm font-semibold pb-1 border-b-2 inline-block"
+        style={{ color: themeColor, borderBottomColor: themeColor }}
+      >
+        {title}
+      </div>
     </div>
   );
 }
@@ -787,35 +834,159 @@ export default function ResumePreview({
     return renderer && renderer.render() !== null;
   });
 
+  // US-16: 模板特定字体
+  const templateFontFamily: Record<string, string> = {
+    academic: "'Times New Roman', 'Noto Serif SC', serif",
+  };
+  const fontFamily = templateFontFamily[templateId] ?? undefined;
+
+  // US-16: 模板容器样式
+  const containerStyles: Record<string, string> = {
+    modern: compact ? 'max-w-3xl p-0' : 'max-w-2xl p-0',
+    classic: compact ? 'max-w-3xl p-0' : 'max-w-2xl p-0',
+    tech: compact ? 'max-w-3xl p-3' : 'max-w-2xl p-4',
+    minimal: compact ? 'max-w-3xl p-6' : 'max-w-2xl p-8',
+    two_column: compact ? 'max-w-3xl p-0' : 'max-w-2xl p-0',
+    academic: compact ? 'max-w-3xl p-5' : 'max-w-2xl p-6',
+  };
+
+  // US-16: 姓名区域渲染
+  const renderNameArea = () => {
+    if (templateId === 'modern') {
+      // modern: 蓝色顶栏 + 白字姓名
+      return (
+        <div className="px-6 py-4 text-center" style={{ backgroundColor: themeColor }}>
+          <h1 className="text-2xl font-bold text-white mb-1">{name}</h1>
+          {contactParts.length > 0 && (
+            <div className="text-xs text-white/80">{contactParts.join(' · ')}</div>
+          )}
+        </div>
+      );
+    }
+    if (templateId === 'classic') {
+      // classic: 蓝色底栏 + 姓名居中 + 底部色条
+      return (
+        <div className="pb-3 mb-3 border-b-4" style={{ borderColor: themeColor }}>
+          <h1 className="text-center text-2xl font-bold mb-1" style={{ color: themeColor }}>{name}</h1>
+          {contactParts.length > 0 && (
+            <div className="text-center text-xs text-text-tertiary">{contactParts.join(' | ')}</div>
+          )}
+        </div>
+      );
+    }
+    if (templateId === 'tech') {
+      // tech: 左侧色条 + 紧凑布局
+      return (
+        <div className="flex items-center gap-3 px-4 py-2 border-l-4 mb-3" style={{ borderColor: themeColor }}>
+          <div>
+            <h1 className="text-xl font-bold text-text-primary">{name}</h1>
+            {contactParts.length > 0 && (
+              <div className="text-xs text-text-tertiary mt-0.5">{contactParts.join(' · ')}</div>
+            )}
+          </div>
+        </div>
+      );
+    }
+    if (templateId === 'minimal') {
+      // minimal: 大量留白 + 细线分隔
+      return (
+        <div className="mb-6 pb-3 border-b border-gray-200">
+          <h1 className="text-center text-xl font-light text-text-primary tracking-wide">{name}</h1>
+          {contactParts.length > 0 && (
+            <div className="text-center text-xs text-text-muted mt-1 tracking-wider">{contactParts.join('  /  ')}</div>
+          )}
+        </div>
+      );
+    }
+    if (templateId === 'two_column') {
+      // two_column → 暖橙卡片风: 暖橙渐变顶栏
+      return (
+        <div
+          className="px-5 py-4 rounded-t-lg"
+          style={{ background: `linear-gradient(135deg, ${themeColor}, ${themeColor}dd)` }}
+        >
+          <h1 className="text-xl font-bold text-white">{name}</h1>
+          {contactParts.length > 0 && (
+            <div className="text-xs text-white/80 mt-0.5">{contactParts.join(' · ')}</div>
+          )}
+        </div>
+      );
+    }
+    if (templateId === 'academic') {
+      // academic: 居中衬线 + 双横线
+      return (
+        <div className="mb-4">
+          <div className="border-t-2 border-gray-800 mb-2" />
+          <h1 className="text-center text-xl font-bold text-text-primary" style={{ fontFamily: "'Times New Roman', serif" }}>{name}</h1>
+          {contactParts.length > 0 && (
+            <div className="text-center text-xs text-text-tertiary mt-1">{contactParts.join('  ·  ')}</div>
+          )}
+          <div className="border-t border-gray-400 mt-2" />
+        </div>
+      );
+    }
+    // 默认
+    return (
+      <>
+        <h1 className={`text-center font-bold text-text-primary ${compact ? 'text-xl mb-1' : 'text-2xl mb-2'}`}>{name}</h1>
+        {contactParts.length > 0 && (
+          <div className="text-center text-xs text-text-tertiary mb-3">{contactParts.join(' | ')}</div>
+        )}
+      </>
+    );
+  };
+
+  // US-16: 段落内容区样式 — 半透明圆角背景框
+  const sectionBgStyles: Record<string, string> = {
+    modern: 'rounded-lg p-3 mt-1 mb-2',
+    classic: 'rounded-md p-3 mt-1 mb-2',
+    tech: 'rounded-md p-2 mt-1 mb-1.5',
+    minimal: 'p-1 mt-1 mb-2',
+    two_column: 'rounded-xl p-3 mt-1 mb-2',
+    academic: 'p-2 mt-1 mb-2',
+  };
+  const sectionBgColors: Record<string, string> = {
+    modern: 'rgba(37, 99, 235, 0.04)',
+    classic: 'rgba(28, 72, 124, 0.04)',
+    tech: 'rgba(15, 118, 110, 0.04)',
+    minimal: 'transparent',
+    two_column: 'rgba(234, 88, 12, 0.05)',
+    academic: 'rgba(0, 0, 0, 0.02)',
+  };
+
+  // US-16: 段落内容区样式
+  const sectionContentClass = templateId === 'two_column'
+    ? 'px-5 py-3'
+    : templateId === 'modern'
+      ? 'px-6 py-3'
+      : templateId === 'minimal'
+        ? 'px-0 py-2'
+        : templateId === 'academic'
+          ? 'px-2 py-2'
+          : 'px-4 py-2';
+
   return (
     <div
-      className={`mx-auto bg-white ${compact ? 'max-w-3xl p-4' : 'max-w-2xl p-6'} shadow-sm`}
-      style={{ minHeight: '100%' }}
+      className={`mx-auto bg-white shadow-sm ${containerStyles[templateId] ?? 'max-w-2xl p-6'}`}
+      style={{ minHeight: '100%', fontFamily }}
     >
-      {/* 姓名 */}
-      <h1
-        className={`text-center font-bold text-text-primary ${compact ? 'text-xl mb-1' : 'text-2xl mb-2'}`}
-        style={templateId === 'classic' ? { color: themeColor } : undefined}
-      >
-        {name}
-      </h1>
-
-      {/* 联系信息 */}
-      {contactParts.length > 0 && (
-        <div className="text-center text-xs text-text-tertiary mb-3">
-          {contactParts.join(' | ')}
-        </div>
-      )}
+      {/* 姓名区域 */}
+      {renderNameArea()}
 
       {/* 按排序渲染各段落 */}
-      {orderedSections.map((section) => {
+      <div className={sectionContentClass}>
+        {orderedSections.map((section) => {
         const renderer = sectionRenderers[section.key];
         if (!renderer) return null;
         const content = renderer.render();
         if (content === null) return null;
         const isGenerating = generatingSection === section.key;
         return (
-          <section key={section.key}>
+          <section
+            key={section.key}
+            className={sectionBgStyles[templateId] ?? 'mt-1 mb-2'}
+            style={{ backgroundColor: sectionBgColors[templateId] ?? 'transparent' }}
+          >
             <div className="flex items-center justify-between">
               <SectionHeader
                 title={section.title || renderer.title}
@@ -839,6 +1010,7 @@ export default function ResumePreview({
       })}
 
       {/* 全部段落为空时的提示 */}
+      </div>
       {!hasContent && (
         <div className="text-center text-sm text-text-muted py-8">
           简历内容为空，请先生成各段落

@@ -23,9 +23,12 @@ const TAB_PILLS = ['版本树', '编辑器', 'Diff 对比'] as const;
 
 /** API 调用失败时的硬编码 fallback 模板 */
 const FALLBACK_TEMPLATES: TemplateInfo[] = [
-  { id: 'modern', name: '现代简约', description: '简洁分隔线，灰蓝色调', theme_color: '#2563eb' },
-  { id: 'classic', name: '经典学术', description: '色块标题条，正式严谨', theme_color: '#1C487C' },
-  { id: 'tech', name: '大厂技术', description: '紧凑布局，技术栈标签', theme_color: '#0F766E' },
+  { id: 'modern', name: '现代简约', description: '简洁现代风，分隔线 + 左对齐标题', theme_color: '#2563eb' },
+  { id: 'classic', name: '经典色块', description: '色块标题条 + 白字标题，沉稳大气', theme_color: '#1C487C' },
+  { id: 'tech', name: '紧凑技术风', description: '页边距小、字号紧凑，适合技术岗', theme_color: '#0F766E' },
+  { id: 'minimal', name: '极简白', description: '单栏大量留白，无色块无分隔线', theme_color: '#333333' },
+  { id: 'two_column', name: '暖橙卡片风', description: '暖橙色调，段落圆角卡片，活泼有层次', theme_color: '#EA580C' },
+  { id: 'academic', name: '学术风', description: '论文格式，衬线字体，居中标题', theme_color: '#1a1a1a' },
 ];
 
 interface CenterPanelProps {
