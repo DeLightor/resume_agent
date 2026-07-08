@@ -38,34 +38,34 @@ function Invoke-Install {
 }
 
 function Invoke-Dev {
-    Write-Host ">>> Starting dev servers (frontend + backend)..." -ForegroundColor Cyan
+    Write-Host ">>> Starting dev servers..." -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "Opening two windows: backend + frontend" -ForegroundColor Cyan
+    Write-Host "Close both windows to stop." -ForegroundColor Yellow
+    Write-Host ""
 
-    # Start backend
-    $backendJob = Start-Job -ScriptBlock {
-        param($dir)
-        Set-Location "$dir\backend"
-        $env:PYTHONHOME = $null
-        $env:PYTHONPATH = $null
-        uv run uvicorn resume_agent.main:app --reload --port 8000
-    } -ArgumentList $ScriptDir
+    # Open backend in new window
+    Start-Process powershell -ArgumentList "-NoExit", "-Command", @"
+`$ErrorActionPreference = 'Stop'
+Set-Location '$ScriptDir\backend'
+`$env:PYTHONHOME = `$null
+`$env:PYTHONPATH = `$null
+Write-Host 'Backend: http://localhost:8000' -ForegroundColor Green
+uv run uvicorn resume_agent.main:app --reload --port 8000
+"@
 
-    # Start frontend
-    $frontendJob = Start-Job -ScriptBlock {
-        param($dir)
-        Set-Location "$dir\frontend"
-        & ".\node_modules\.bin\vite"
-    } -ArgumentList $ScriptDir
+    # Open frontend in new window
+    Start-Process powershell -ArgumentList "-NoExit", "-Command", @"
+`$ErrorActionPreference = 'Stop'
+Set-Location '$ScriptDir\frontend'
+Write-Host 'Frontend: http://localhost:5173' -ForegroundColor Green
+& ".\node_modules\.bin\vite"
+"@
 
-    Write-Host "Frontend: http://localhost:5173" -ForegroundColor Green
     Write-Host "Backend:  http://localhost:8000" -ForegroundColor Green
-    Write-Host "Press Ctrl+C to stop..." -ForegroundColor Yellow
-
-    try {
-        Wait-Job -Any $backendJob, $frontendJob
-    } finally {
-        Stop-Job $backendJob, $frontendJob -ErrorAction SilentlyContinue
-        Remove-Job $backendJob, $frontendJob -ErrorAction SilentlyContinue
-    }
+    Write-Host "Frontend: http://localhost:5173" -ForegroundColor Green
+    Write-Host ""
+    Write-Host "Both servers started in new windows." -ForegroundColor Cyan
 }
 
 function Invoke-Build {
