@@ -441,3 +441,23 @@ export async function updateSectionOrder(
 ): Promise<void> {
   await api.put(`/tree/node/${nodeId}/section-order`, { sections });
 }
+
+/** US-15: 完整性检测 */
+export async function checkCompleteness(
+  nodeId: string,
+): Promise<{ score: number; checks: Array<Record<string, unknown>> }> {
+  const result = await api.post<{ score: number; checks: Array<Record<string, unknown>> }>(
+    '/completeness/check',
+    { node_id: nodeId },
+  );
+  return result;
+}
+
+/** US-15: 编辑段落 */
+export async function updateSection(
+  nodeId: string,
+  section: string,
+  data: unknown,
+): Promise<void> {
+  await api.put(`/tree/node/${nodeId}/section`, { section, data });
+}

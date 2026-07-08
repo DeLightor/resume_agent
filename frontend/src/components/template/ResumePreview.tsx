@@ -1,9 +1,12 @@
 // frontend/src/components/template/ResumePreview.tsx
-// 简历预览组件（US-8 + US-12 增强）
+// 简历预览组件（US-8 + US-12 + US-15 增强）
 // 渲染完整简历：个人信息 → 自我评价 → 工作经历 → 项目经历 → 技能 → 教育背景
+// US-15: 支持内联编辑（summary/experience/projects highlights 可直接修改）
 // 兼容两种数据源：
 // 1. AI 生成数据（扁平结构：name/email/phone 在顶层，skills 是对象）
 // 2. 上传解析数据（嵌套结构：basic.name/basic.phone，skills 是字符串数组，含 personal_info）
+
+import { useState, useEffect } from 'react';
 
 interface ResumePreviewProps {
   /** 简历数据（AI 生成或节点 content_json），null 时显示空状态 */
@@ -14,6 +17,10 @@ interface ResumePreviewProps {
   onRegenerateSection?: (section: string) => void;
   /** US-14: 正在重新生成的段落 key */
   generatingSection?: string | null;
+  /** US-15: 段落编辑回调（section + data） */
+  onEditSection?: (section: string, data: unknown) => void;
+  /** US-15: 高亮字段（缺失字段标注） */
+  highlightFields?: Set<string>;
 }
 
 const THEME_COLORS: Record<string, string> = {
@@ -140,6 +147,173 @@ function extractSkills(data: Record<string, unknown>): {
   return { isObject: false, obj: {}, strArray: [] };
 }
 
+// === US-15: 可编辑组件 ===
+
+function EditableSummary({
+  value,
+  onChange,
+  placeholder,
+}: {
+  value: string;
+  onChange: (val: string) => void;
+  placeholder?: string;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(value);
+
+  // 节点切换时同步
+  useEffect(() => {
+    setText(value);
+  }, [value]);
+
+  function handleBlur() {
+    setEditing(false);
+    if (text !== value) {
+      onChange(text);
+    }
+  }
+
+  if (editing) {
+    return (
+      <textarea
+        autoFocus
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={handleBlur}
+        className="w-full text-sm text-text-secondary leading-relaxed p-2 border border-brand-primary rounded bg-white resize-none focus:outline-none focus:ring-1 focus:ring-brand-primary"
+        rows={4}
+      />
+    );
+  }
+
+  return (
+    <p
+      onClick={() => setEditing(true)}
+      className="text-xs text-text-secondary leading-relaxed cursor-text hover:bg-blue-50 rounded p-1 -m-1 transition-colors"
+      title="点击编辑"
+    >
+      {value || placeholder || '点击编辑'}
+    </p>
+  );
+}
+
+function EditableText({
+  value,
+  onChange,
+  placeholder,
+  className,
+}: {
+  value: string;
+  onChange: (val: string) => void;
+  placeholder?: string;
+  className?: string;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(value);
+
+  useEffect(() => {
+    setText(value);
+  }, [value]);
+
+  function handleBlur() {
+    setEditing(false);
+    if (text !== value) {
+      onChange(text);
+    }
+  }
+
+  if (editing) {
+    return (
+      <input
+        autoFocus
+        type="text"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={handleBlur}
+        style={{ display: 'inline-block', width: '500px' }}
+        className={`border border-brand-primary rounded px-2 py-1 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-brand-primary ${className ?? ''}`}
+      />
+    );
+  }
+
+  return (
+    <span
+      onClick={(e) => {
+        e.stopPropagation();
+        setEditing(true);
+      }}
+      className={`cursor-text hover:bg-blue-50 rounded px-0.5 ${className ?? ''}`}
+      title="点击编辑"
+    >
+      {value || placeholder || '—'}
+    </span>
+  );
+}
+
+function EditableHighlights({
+  highlights,
+  onChange,
+}: {
+  highlights: string[];
+  onChange: (val: string[]) => void;
+}) {
+  const [items, setItems] = useState(highlights);
+
+  useEffect(() => {
+    setItems(highlights);
+  }, [highlights]);
+
+  function updateItem(idx: number, val: string) {
+    const newItems = [...items];
+    newItems[idx] = val;
+    setItems(newItems);
+    onChange(newItems);
+  }
+
+  function addItem() {
+    const newItems = [...items, ''];
+    setItems(newItems);
+  }
+
+  function removeItem(idx: number) {
+    const newItems = items.filter((_, i) => i !== idx);
+    setItems(newItems);
+    onChange(newItems);
+  }
+
+  return (
+    <ul className="mt-1 space-y-1">
+      {items.map((h, i) => (
+        <li key={i} className="text-xs text-text-secondary flex gap-1.5 items-start leading-snug">
+          <span className="text-text-muted flex-shrink-0 mt-0.5">·</span>
+          <EditableText
+            value={h}
+            onChange={(val) => updateItem(i, val)}
+            className="flex-1"
+          />
+          <button
+            onClick={(e) => { e.stopPropagation(); removeItem(i); }}
+            className="bg-error text-white rounded w-4 h-4 flex items-center justify-center text-[10px] flex-shrink-0 mt-0.5 hover:bg-red-600"
+            title="删除此条"
+          >
+            ✕
+          </button>
+        </li>
+      ))}
+      <li>
+        <button
+          onClick={(e) => { e.stopPropagation(); addItem(); }}
+          className="text-[11px] text-brand-primary hover:underline mt-1"
+        >
+          + 添加一条
+        </button>
+      </li>
+    </ul>
+  );
+}
+
+// === 主组件 ===
+
 function SectionHeader({
   title,
   templateId,
@@ -182,42 +356,55 @@ function SectionHeader({
 function ExperienceItem({
   exp,
   compact,
+  onEdit,
+  onDelete,
 }: {
   exp: Record<string, unknown>;
   compact: boolean;
+  onEdit?: (data: Record<string, unknown>) => void;
+  onDelete?: () => void;
 }) {
   const role = asString(exp.role);
   const company = asString(exp.company);
   const period = asString(exp.period);
   const highlights = asStringArray(exp.highlights);
 
+  function handleFieldChange(field: string, val: string) {
+    onEdit?.({ ...exp, [field]: val });
+  }
+
+  function handleHighlightsChange(newHighlights: string[]) {
+    onEdit?.({ ...exp, highlights: newHighlights });
+  }
+
   return (
-    <div className={compact ? 'mb-2' : 'mb-3'}>
-      <div className="flex items-baseline justify-between">
+    <div className={`${compact ? 'mb-2' : 'mb-3'} group relative`}>
+      {onDelete && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onDelete(); }}
+          className="absolute top-0 right-0 bg-error text-white rounded w-5 h-5 flex items-center justify-center text-[10px] hover:bg-red-600 z-10 opacity-0 group-hover:opacity-100 transition-opacity"
+          title="删除此条经历"
+        >
+          ✕
+        </button>
+      )}
+      <div className="flex items-baseline justify-between pr-7">
         <span className="text-sm font-medium text-text-primary">
-          {role}
+          <EditableText value={role} onChange={(v) => handleFieldChange('role', v)} placeholder="职位" />
           {company && (
             <span className="text-text-tertiary font-normal ml-1">
-              | {company}
+              | <EditableText value={company} onChange={(v) => handleFieldChange('company', v)} />
             </span>
           )}
         </span>
         {period && (
-          <span className="text-[11px] text-text-muted">{period}</span>
+          <span className="text-[11px] text-text-muted">
+            <EditableText value={period} onChange={(v) => handleFieldChange('period', v)} />
+          </span>
         )}
       </div>
       {highlights.length > 0 && (
-        <ul className={compact ? 'mt-0.5 space-y-0.5' : 'mt-1 space-y-1'}>
-          {highlights.map((h, i) => (
-            <li
-              key={i}
-              className="text-xs text-text-secondary flex gap-1.5 leading-snug"
-            >
-              <span className="text-text-muted flex-shrink-0">·</span>
-              <span>{h}</span>
-            </li>
-          ))}
-        </ul>
+        <EditableHighlights highlights={highlights} onChange={handleHighlightsChange} />
       )}
     </div>
   );
@@ -226,9 +413,13 @@ function ExperienceItem({
 function ProjectItemView({
   proj,
   compact,
+  onEdit,
+  onDelete,
 }: {
   proj: Record<string, unknown>;
   compact: boolean;
+  onEdit?: (data: Record<string, unknown>) => void;
+  onDelete?: () => void;
 }) {
   const name = asString(proj.name);
   const role = asString(proj.role);
@@ -236,25 +427,49 @@ function ProjectItemView({
   const description = asString(proj.description);
   const techStack = asStringArray(proj.tech_stack);
 
+  function handleFieldChange(field: string, val: string) {
+    onEdit?.({ ...proj, [field]: val });
+  }
+
+  function handleHighlightsChange(newHighlights: string[]) {
+    onEdit?.({ ...proj, highlights: newHighlights });
+  }
+
+  const highlights = asStringArray(proj.highlights);
+
   return (
-    <div className={compact ? 'mb-2' : 'mb-3'}>
-      <div className="flex items-baseline justify-between">
+    <div className={`${compact ? 'mb-2' : 'mb-3'} group relative`}>
+      {onDelete && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onDelete(); }}
+          className="absolute top-0 right-0 bg-error text-white rounded w-5 h-5 flex items-center justify-center text-[10px] hover:bg-red-600 z-10 opacity-0 group-hover:opacity-100 transition-opacity"
+          title="删除此项目"
+        >
+          ✕
+        </button>
+      )}
+      <div className="flex items-baseline justify-between pr-7">
         <span className="text-sm font-medium text-text-primary">
-          {name}
+          <EditableText value={name} onChange={(v) => handleFieldChange('name', v)} placeholder="项目名" />
           {role && (
             <span className="text-text-tertiary font-normal ml-1">
-              | {role}
+              | <EditableText value={role} onChange={(v) => handleFieldChange('role', v)} />
             </span>
           )}
         </span>
         {period && (
-          <span className="text-[11px] text-text-muted">{period}</span>
+          <span className="text-[11px] text-text-muted">
+            <EditableText value={period} onChange={(v) => handleFieldChange('period', v)} />
+          </span>
         )}
       </div>
-      {description && (
-        <p className="text-xs text-text-secondary mt-0.5 leading-snug">
-          {description}
-        </p>
+      {description !== null && (
+        <div className="mt-0.5">
+          <EditableSummary value={description} onChange={(v) => handleFieldChange('description', v)} placeholder="点击添加项目描述" />
+        </div>
+      )}
+      {highlights.length > 0 && (
+        <EditableHighlights highlights={highlights} onChange={handleHighlightsChange} />
       )}
       {techStack.length > 0 && (
         <div className="flex flex-wrap gap-1 mt-1">
@@ -311,6 +526,8 @@ export default function ResumePreview({
   templateId,
   onRegenerateSection,
   generatingSection,
+  onEditSection,
+  // highlightFields 暂未使用，预留给后续高亮标注
 }: ResumePreviewProps) {
   if (!resumeData) {
     return (
@@ -366,33 +583,78 @@ export default function ResumePreview({
     summary: {
       title: '自我评价',
       render: () =>
-        summary ? (
-          <p className="text-xs text-text-secondary leading-relaxed">
-            {summary}
-          </p>
+        summary !== null ? (
+          <EditableSummary
+            value={summary}
+            onChange={(val) => onEditSection?.('summary', val)}
+          />
         ) : null,
     },
     experience: {
       title: '工作经历',
-      render: () =>
-        experiences.length > 0 ? (
-          <>
-            {experiences.map((exp, i) => (
-              <ExperienceItem key={i} exp={exp} compact={compact} />
-            ))}
-          </>
-        ) : null,
+      render: () => (
+        <>
+          {experiences.map((exp, i) => (
+            <ExperienceItem
+              key={i}
+              exp={exp}
+              compact={compact}
+              onEdit={(data) => {
+                const newExp = [...experiences];
+                newExp[i] = data;
+                onEditSection?.('experience', newExp);
+              }}
+              onDelete={() => {
+                const newExp = experiences.filter((_, idx) => idx !== i);
+                onEditSection?.('experience', newExp);
+              }}
+            />
+          ))}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              const newItem = { role: '新职位', company: '', period: '', highlights: [] };
+              onEditSection?.('experience', [...experiences, newItem]);
+            }}
+            className="text-[11px] text-brand-primary hover:underline mt-1"
+          >
+            + 添加工作经历
+          </button>
+        </>
+      ),
     },
     projects: {
       title: '项目经历',
-      render: () =>
-        projects.length > 0 ? (
-          <>
-            {projects.map((proj, i) => (
-              <ProjectItemView key={i} proj={proj} compact={compact} />
-            ))}
-          </>
-        ) : null,
+      render: () => (
+        <>
+          {projects.map((proj, i) => (
+            <ProjectItemView
+              key={i}
+              proj={proj}
+              compact={compact}
+              onEdit={(data) => {
+                const newProjects = [...projects];
+                newProjects[i] = data;
+                onEditSection?.('projects', newProjects);
+              }}
+              onDelete={() => {
+                const newProjects = projects.filter((_, idx) => idx !== i);
+                onEditSection?.('projects', newProjects);
+              }}
+            />
+          ))}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              const newItem = { name: '新项目', role: '', period: '', description: '', highlights: [], tech_stack: [] };
+              onEditSection?.('projects', [...projects, newItem]);
+            }}
+            className="text-[11px] text-brand-primary hover:underline mt-1"
+          >
+            + 添加项目经历
+          </button>
+        </>
+      ),
     },
     skills: {
       title: '技能',
@@ -418,19 +680,32 @@ export default function ResumePreview({
                       return (
                         <div
                           key={i}
-                          className="text-xs text-text-secondary flex gap-1.5 leading-snug"
+                          className="text-xs text-text-secondary flex gap-1.5 items-start leading-snug"
                         >
-                          <span className="text-text-muted flex-shrink-0">·</span>
-                          {context ? (
-                            <span>
-                              <span className="text-text-primary font-medium">
-                                {sName}
-                              </span>
-                              <span className="text-text-tertiary">：{context}</span>
-                            </span>
-                          ) : (
-                            <span className="text-text-primary">{sName}</span>
-                          )}
+                          <span className="text-text-muted flex-shrink-0 mt-0.5">·</span>
+                          <EditableText
+                            value={sName}
+                            onChange={(val) => {
+                              const newSkills = JSON.parse(JSON.stringify(skillsObj));
+                              if (!newSkills[cat.key]) newSkills[cat.key] = [];
+                              if (!newSkills[cat.key][i]) newSkills[cat.key][i] = {};
+                              newSkills[cat.key][i].name = val;
+                              onEditSection?.('skills', newSkills);
+                            }}
+                            className="font-medium text-text-primary"
+                          />
+                          <span className="text-text-tertiary">：</span>
+                          <EditableText
+                            value={context}
+                            onChange={(val) => {
+                              const newSkills = JSON.parse(JSON.stringify(skillsObj));
+                              if (!newSkills[cat.key]) newSkills[cat.key] = [];
+                              if (!newSkills[cat.key][i]) newSkills[cat.key][i] = {};
+                              newSkills[cat.key][i].context = val;
+                              onEditSection?.('skills', newSkills);
+                            }}
+                            className="flex-1"
+                          />
                         </div>
                       );
                     })}
@@ -444,12 +719,16 @@ export default function ResumePreview({
           return (
             <div className="flex flex-wrap gap-1">
               {skillsStrArray.map((skill, i) => (
-                <span
+                <EditableText
                   key={i}
+                  value={skill}
+                  onChange={(val) => {
+                    const newArr = [...skillsStrArray];
+                    newArr[i] = val;
+                    onEditSection?.('skills', newArr);
+                  }}
                   className="text-[11px] px-1.5 py-0.5 rounded bg-bg-tertiary text-text-secondary"
-                >
-                  {skill}
-                </span>
+                />
               ))}
             </div>
           );

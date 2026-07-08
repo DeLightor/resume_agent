@@ -4,7 +4,7 @@
 // US-3：支持 activeView 切换（'version-tree' | 'knowledge'），
 //       knowledge 模式下渲染 KnowledgeView 替代版本树
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Breadcrumb from '@/components/common/Breadcrumb';
 import VersionTree from '@/components/tree/VersionTree';
 import NodeDetailPanel from '@/components/tree/NodeDetailPanel';
@@ -13,7 +13,8 @@ import KnowledgeView from '@/components/knowledge/KnowledgeView';
 import TemplateSelector from '@/components/template/TemplateSelector';
 import ResumePreview from '@/components/template/ResumePreview';
 import DiffView from '@/components/diff/DiffView';
-import { getTemplates, getTree, deleteNode, generateFull, regenerateSection } from '@/lib/api';
+import CompletenessBar from '@/components/completeness/CompletenessBar';
+import { getTemplates, getTree, deleteNode, generateFull, regenerateSection, updateSection } from '@/lib/api';
 import type { ResumeNode, TreeData } from '@/types/tree';
 import type { ActiveView } from '@/types/knowledge';
 import type { TemplateInfo } from '@/types/template';
@@ -129,12 +130,17 @@ export default function CenterPanel({
   const [generating, setGenerating] = useState(false);
   const [generatingSection, setGeneratingSection] = useState<string | null>(null);
   const [generateMsg, setGenerateMsg] = useState<string | null>(null);
+  // US-15: 完整性检测刷新触发器
+  const [completenessRefreshKey, setCompletenessRefreshKey] = useState(0);
 
   const reloadSelectedNode = useCallback(() => {
     if (!selectedNode) return;
     getTree().then((data: TreeData) => {
       const updated = data.nodes.find((n) => n.node_id === selectedNode.node_id);
-      if (updated) setSelectedNode(updated);
+      if (updated) {
+        setSelectedNode(updated);
+        setCompletenessRefreshKey((k) => k + 1);
+      }
     });
   }, [selectedNode]);
 
@@ -178,6 +184,24 @@ export default function CenterPanel({
       }
     },
     [selectedNode, generatingSection, reloadSelectedNode, structuredJD],
+  );
+
+  // US-15: 段落编辑（防抖保存）
+  const editDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleEditSection = useCallback(
+    (section: string, data: unknown) => {
+      if (!selectedNode) return;
+      if (editDebounceRef.current) clearTimeout(editDebounceRef.current);
+      editDebounceRef.current = setTimeout(async () => {
+        try {
+          await updateSection(selectedNode.node_id, section, data);
+          reloadSelectedNode();
+        } catch {
+          // 静默
+        }
+      }, 500);
+    },
+    [selectedNode, reloadSelectedNode],
   );
 
   const handleTreeLoad = useCallback((data: TreeData) => {
@@ -310,12 +334,18 @@ export default function CenterPanel({
               <span className="text-xs text-text-muted">需先在右栏上传 JD 招聘信息</span>
             )}
           </div>
+          {/* US-15: 完整性检测条 */}
+          <CompletenessBar
+            nodeId={selectedNode?.node_id ?? null}
+            refreshKey={completenessRefreshKey}
+          />
           <div className="flex-1 overflow-y-auto p-4 bg-bg-secondary">
             <ResumePreview
               resumeData={previewData}
               templateId={templateId}
               onRegenerateSection={handleRegenerateSection}
               generatingSection={generatingSection}
+              onEditSection={handleEditSection}
             />
           </div>
         </div>
