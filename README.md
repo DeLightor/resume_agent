@@ -41,6 +41,30 @@ make dev        # 启动开发服务器
 | uv | latest | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
 | Docker | ≥ 24（可选） | [docker.com](https://docker.com/) |
 
+## 快速安装
+
+### macOS / Linux
+
+```bash
+./install.sh
+```
+
+脚本会自动检测环境、安装依赖、引导配置 LLM API Key。
+
+### Windows
+
+```powershell
+powershell -ExecutionPolicy Bypass -File install.ps1
+```
+
+### Docker 一键启动（无需上述依赖）
+
+```bash
+docker compose up
+```
+
+访问 `http://localhost:5173` 即可使用。
+
 ## 配置
 
 复制 `.env.example` 为 `.env` 并填入以下配置：
