@@ -7,9 +7,9 @@
 import type { ActiveView } from '@/types/knowledge';
 
 const NAV_TABS: { label: string; view: ActiveView; collapseRight?: boolean }[] = [
-  { label: '总览面板', view: 'version-tree' },
+  { label: '总览面板', view: 'version-tree', collapseRight: false },
   { label: '简历版本分支', view: 'version-tree', collapseRight: true },
-  { label: '知识库', view: 'knowledge' },
+  { label: '知识库', view: 'knowledge', collapseRight: false },
 ];
 
 interface GlobalToolbarProps {
