@@ -1,6 +1,6 @@
 # Resume-Agent 产品需求文档（PRD）
 
-> 文档版本：v1.2　|　状态：ACTIVE　|　日期：2026-07-07　|　定位：开源个人简历管理系统
+> 文档版本：v1.3　|　状态：ACTIVE　|　日期：2026-07-09　|　定位：开源个人简历管理系统
 
 ---
 
@@ -26,7 +26,7 @@ Resume-Agent 把简历当代码仓库来管：Master 主干分化出方向分支
 | 部署到可用时间 | ≤ 15 分钟 | 从 clone 到首次访问工作台 |
 | Docker 镜像大小 | ≤ 500MB | 多阶段构建，剔除构建依赖 |
 
-### MVP 完成状态（v1.0 + v1.1）
+### MVP 完成状态（v1.0 + v1.1 + v1.2 + v1.3）
 
 | 用户故事 | 状态 | 实现方式 |
 |----------|------|----------|
@@ -41,6 +41,15 @@ Resume-Agent 把简历当代码仓库来管：Master 主干分化出方向分支
 | US-9 AI 智能补全 | ✅ | Gap 报告驱动，建议卡片，逐条采纳，分段缓存 |
 | US-10 版本 Diff 对比 | ✅ | 字段级 diff（experience/projects/skills），结构化卡片渲染 |
 | US-11 AI 导师学习建议 | ✅ | Tavily Web 搜索 + 并行 LLM 调用，学习路径 + 资源推荐 + 状态标记 |
+| US-12 个人信息管理 | ✅ | 左栏知识库表单，联系方式/教育背景/自我评价，节点继承，知识库提取 |
+| US-13 简历段落可排序 | ✅ | 拖拽调整 8 段落顺序，显示/隐藏切换，实时预览刷新 |
+| US-14 一键生成整份简历 | ✅ | asyncio.gather 并行生成，JD 驱动，单段可重生成 |
+| US-15 信息完整性检测 | ✅ | 0-100 评分 + 8 项检查清单，缺失字段高亮，可编辑预览 |
+| US-16 模板系统配置化 | ✅ | 6 套模板（modern/classic/tech/minimal/暖橙卡片风/academic），TemplateConfig |
+| US-17 上游变更检测 | ✅ | master 修改后子节点标记橙色徽标，upstream_changes 字段级 diff |
+| US-18 选择性合并 Diff | ✅ | 逐字段接受/拒绝按钮，字段级 diff 渲染，全部接受/批量操作 |
+| US-19 一键安装脚本 | ✅ | install.sh（macOS/Linux）+ install.ps1（Windows），5 步引导 |
+| US-20 Windows 原生支持 | ✅ | Makefile.ps1 PowerShell 等效，路径兼容，.env 多级查找 |
 
 ---
 
@@ -177,18 +186,18 @@ Resume-Agent 把简历当代码仓库来管：Master 主干分化出方向分支
 - [x] 前端预览 + 后端 PDF 渲染统一使用 TemplateConfig
 - [x] 模板支持段落顺序配置（与 US-13 联动）
 
-### Non-Goals（v1.2 明确排除）
+### Non-Goals（v1.3 明确排除）
 
-以下不在 v1.2 范围内：
+以下不在 v1.3 范围内：
 
 - **多用户/协作**：仍是单用户本地应用
 - **云端同步**：不做跨设备同步
-- **上游继承自动合并（B2）**：手动新建分支，不实现自动传播
-- **投递时间线追踪**：不在 v1.2 内
+- **投递时间线追踪**：不在 v1.3 内
 - **移动端适配**：仅桌面端（≥ 1024px）
 - **开源模型本地运行（Ollama）**：继续用云端 LLM API
-- **模板市场/自定义模板导入**：v1.2 只提供内置模板
-- **ATS 评分**：v1.2 不做自动评分
+- **模板市场/自定义模板导入**：v1.3 只提供内置模板
+- **ATS 评分**：v1.3 不做自动评分
+- **CI Windows 矩阵测试**：手动验证已覆盖，CI 自动化留后续
 
 ---
 
@@ -333,6 +342,10 @@ PDF 导出（reportlab，与预览一致）
 | `/api/tree/node/{id}/personal-info` | PUT | 更新节点个人信息 | v1.2 |
 | `/api/templates` | GET | 获取模板列表（配置化，6 套） | v1.2 |
 | `/api/resume/check-completeness` | POST | 信息完整性检测 | v1.2 |
+| `/api/tree/node/{id}/upstream-changes` | GET | 获取上游变更列表 | v1.3 ✅ |
+| `/api/tree/node/{id}/merge` | POST | 合并指定字段 | v1.3 ✅ |
+| `/api/tree/node/{id}/merge/all` | POST | 批量全部接受 | v1.3 ✅ |
+| `/api/tree/node/{id}/reject` | POST | 拒绝指定字段 | v1.3 ✅ |
 
 ### 数据存储
 
@@ -361,13 +374,13 @@ PDF 导出（reportlab，与预览一致）
 |------|----------|------|------|
 | **Docker Compose** | 有 Docker 环境的用户 | `docker compose up` | ✅ v1.0 |
 | **源码 + Makefile** | 想改代码的开发者 | `make install && make dev` | ✅ v1.0 |
-| **一键脚本** | 不想装 Docker 的用户 | `curl -fsSL install.sh \| sh` | v1.2 |
+| **一键脚本** | 不想装 Docker 的用户 | `./install.sh` 或 `install.ps1` | ✅ v1.3 |
 
 #### 依赖管理
 
 | 语言 | 工具 | 锁文件 | 版本要求 |
 |------|------|--------|----------|
-| Python | uv | `uv.lock` | Python ≥ 3.12 |
+| Python | uv | `uv.lock` | Python ≥ 3.10 |
 | Node | pnpm | `pnpm-lock.yaml` | Node ≥ 20 |
 
 #### 跨平台支持
@@ -376,7 +389,7 @@ PDF 导出（reportlab，与预览一致）
 |------|----------|------|
 | macOS（Intel + Apple Silicon） | ✅ | 主要开发和测试平台 |
 | Linux（Ubuntu 22.04+ / Debian 12+） | ✅ | Docker 方案优先验证 |
-| Windows（WSL2） | ✅ 通过 WSL2 | 原生 Windows 支持留 v1.2 |
+| Windows（PowerShell 原生） | ✅ | `install.ps1` + `Makefile.ps1`，无需 WSL |
 
 ---
 
@@ -389,7 +402,7 @@ PDF 导出（reportlab，与预览一致）
 | **v1.0 MVP** | US-1~US-7：资产冷启动 + 版本树 + 知识库RAG + JD分析 + Gap报告 + AI生成 + PDF导出 | ✅ 已完成 | 6 周 |
 | **v1.1** | US-8~US-11：简历预览/模板 + 智能补全 + 版本Diff + AI导师 | ✅ 已完成 | 4-5 周 |
 | **v1.2** | US-12~US-16：个人信息管理 + 段落可排序 + 一键生成 + 信息完整性检测 + 模板配置化 | ✅ 已完成 | 3 周 |
-| **v1.3** | US-17~US-20：上游变更检测+选择性合并 + 一键安装脚本 + Windows 原生支持 | 📋 规划中 | +3 周 |
+| **v1.3** | US-17~US-20：上游变更检测+选择性合并 + 一键安装脚本 + Windows 原生支持 | ✅ 已完成 | 2 周 |
 | **v2.0** | 开源模型本地运行(Ollama) + 模板市场 + 插件系统 + 移动端 | 📋 规划中 | +6 周 |
 
 ### Technical Risks
@@ -415,6 +428,19 @@ PDF 导出（reportlab，与预览一致）
 - **MinerU API**：JD 截图 OCR 依赖，有免费额度，API 宕机时降级为手动输入 JD
 - **Chroma 嵌入式**：向量检索底层依赖，需持续维护稳定性
 - **reportlab**：PDF 生成唯一依赖，成熟稳定
+
+### v1.2 → v1.3 变更摘要
+
+- **新增**：US-17 上游变更检测与提示（master 修改后子节点标记橙色徽标）
+- **新增**：US-18 选择性合并 Diff 视图（逐字段接受/拒绝，字段级 diff 渲染）
+- **新增**：US-19 一键安装脚本（install.sh + install.ps1，环境检测 + 依赖安装 + LLM/MinerU 配置引导）
+- **新增**：US-20 Windows 原生支持（Makefile.ps1，路径兼容，.env 多级查找，README FAQ）
+- **更新**：API 集成点新增 4 个端点（upstream-changes / merge / merge/all / reject）
+- **更新**：跨平台支持表 Windows 从 WSL2 改为原生 PowerShell
+- **更新**：Python 版本要求从 3.12 放宽到 3.10
+- **更新**：部署方式表一键脚本标记为 ✅ v1.3
+- **修复**：后端 .env 读取路径（env_file 改为多级查找 `["../.env", ".env"]`）
+- **修复**：pnpm-workspace.yaml 误判问题（删除，改用 package.json onlyBuiltDependencies）
 
 ---
 
@@ -474,52 +500,53 @@ LLM 无法真正验证经历是否客观发生过，只能检测 AI 套话、前
 
 ### User Stories
 
-#### US-17：上游变更检测与提示（B2）
+#### US-17：上游变更检测与提示（B2）✅
 **As a** 求职者，**I want** master 节点修改个人信息后，子分支自动标记"有更新可合并"，**so that** 我不会遗漏上游的变更。
 
 **Acceptance Criteria：**
-- [ ] master 节点修改 personal_info 后，所有子节点标记 `has_upstream_update: true`
-- [ ] 版本树画布中，有上游更新的节点显示橙色徽标
-- [ ] 点击节点时，侧栏显示"上游有 N 项变更可合并"提示
-- [ ] 变更检测范围：仅 personal_info（字段级）
-- [ ] 合并粒度：字段级（如 contact.name 整体接受/拒绝，不拆到子字段）
-- [ ] 变更记录存入节点的 `upstream_changes` 字段
+- [x] master 节点修改 personal_info 后，所有子节点标记 `has_upstream_update: true`
+- [x] 版本树画布中，有上游更新的节点显示橙色徽标
+- [x] 点击节点时，侧栏显示"上游有 N 项变更可合并"提示
+- [x] 变更检测范围：仅 personal_info（字段级）
+- [x] 合并粒度：字段级（如 contact.name 整体接受/拒绝，不拆到子字段）
+- [x] 变更记录存入节点的 `upstream_changes` 字段
 
-#### US-18：选择性合并 Diff 视图（B2）
+#### US-18：选择性合并 Diff 视图（B2）✅
 **As a** 求职者，**I want** 在 Diff 视图中逐字段接受或拒绝上游变更，**so that** 子节点的定制修改不会被覆盖。
 
 **Acceptance Criteria：**
-- [ ] 点击"有更新可合并"提示，打开 Diff 视图
-- [ ] Diff 视图以字段为单位展示：旧值 → 新值，接受/拒绝按钮
-- [ ] 支持的字段：personal_info.contact（name/phone/email 等）、personal_info.education、personal_info.summary
-- [ ] 接受后子节点对应字段更新为 master 的值
-- [ ] 拒绝后子节点保持原值，标记为"已忽略"
-- [ ] 全部处理完后，`has_upstream_update` 标记清除
-- [ ] 支持批量"全部接受"
+- [x] 点击"有更新可合并"提示，打开 Diff 视图
+- [x] Diff 视图以字段为单位展示：旧值 → 新值，接受/拒绝按钮
+- [x] 支持的字段：personal_info.contact（name/phone/email 等）、personal_info.education、personal_info.summary
+- [x] 接受后子节点对应字段更新为 master 的值
+- [x] 拒绝后子节点保持原值，标记为"已忽略"
+- [x] 全部处理完后，`has_upstream_update` 标记清除
+- [x] 支持批量"全部接受"
 
-#### US-19：一键安装脚本（D1）
+#### US-19：一键安装脚本（D1）✅
 **As a** 新用户，**I want** 一键安装脚本自动检测环境、安装依赖、配置 API Key，**so that** 5 分钟内完成项目搭建。
 
 **Acceptance Criteria：**
-- [ ] 提供 `install.sh`（macOS/Linux）和 `install.ps1`（Windows PowerShell）
-- [ ] 自动检测：Node.js ≥ 20、pnpm ≥ 9、Python ≥ 3.12、uv、Docker（可选）
-- [ ] 缺失依赖时提示安装命令（不自动安装系统级软件）
-- [ ] 前后端依赖安装：`pnpm install` + `uv sync`
-- [ ] 交互式配置引导：LLM_PROVIDER、LLM_API_KEY、LLM_BASE_URL、LLM_MODEL
-- [ ] 自动创建 `.env` 文件（从 `.env.example` 复制）
-- [ ] 检测 Docker 可用性，提示 `docker compose up` 一键启动
-- [ ] 安装完成提示访问地址（localhost:5173）
+- [x] 提供 `install.sh`（macOS/Linux）和 `install.ps1`（Windows PowerShell）
+- [x] 自动检测：Node.js ≥ 20、pnpm ≥ 9、Python ≥ 3.10、uv、Docker（可选）
+- [x] 缺失依赖时提示安装命令（不自动安装系统级软件）
+- [x] 前后端依赖安装：`pnpm install` + `uv sync`
+- [x] 交互式配置引导：LLM_PROVIDER、LLM_API_KEY、LLM_BASE_URL、LLM_MODEL
+- [x] 交互式配置引导：MINERU_API_TOKEN
+- [x] 自动创建 `.env` 文件（从 `.env.example` 复制）
+- [x] 检测 Docker 可用性，提示 `docker compose up` 一键启动
+- [x] 安装完成提示访问地址（localhost:5173）
 
-#### US-20：Windows 原生支持（D2）
+#### US-20：Windows 原生支持（D2）✅
 **As a** Windows 用户，**I want** 在 PowerShell 中原生运行所有开发命令，**so that** 不需要 WSL 也能使用 Resume-Agent。
 
 **Acceptance Criteria：**
-- [ ] 所有 Makefile 命令提供 PowerShell 等效版本（`Makefile.ps1` 或 `scripts/*.ps1`）
-- [ ] `install.ps1` 安装脚本完整支持 Windows
-- [ ] 路径分隔符兼容（`os.path.join` 不硬编码 `/`）
-- [ ] SQLite 路径默认 `~/.resume-agent/data.db`（Windows 下 `%USERPROFILE%\.resume-agent\`）
-- [ ] Docker Compose 方式完整支持 Windows Docker Desktop
-- [ ] README 补充 Windows 安装说明
+- [x] 所有 Makefile 命令提供 PowerShell 等效版本（`Makefile.ps1`）
+- [x] `install.ps1` 安装脚本完整支持 Windows
+- [x] 路径分隔符兼容（`os.path.join` 不硬编码 `/`）
+- [x] SQLite 路径默认 `~/.resume-agent/data.db`（Windows 下 `%USERPROFILE%\.resume-agent\`）
+- [x] Docker Compose 方式完整支持 Windows Docker Desktop
+- [x] README 补充 Windows 安装说明 + 常见问题 FAQ
 - [ ] CI 增加 Windows 矩阵测试（可选）
 
 ### Technical Specifications
