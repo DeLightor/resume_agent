@@ -6,6 +6,7 @@
 // - activeView：从 Workspace 传入（GlobalToolbar + LeftPanel 共享）
 //
 // US-21：activeView 提升到 Workspace 层，treeNodes 传给 LeftPanel 用于 badge
+// v1.4: rightPanelCollapsed — 点击"简历版本分支"时收起右栏，给中栏更多空间
 
 import { useCallback, useState } from 'react';
 import LeftPanel from './LeftPanel';
@@ -19,9 +20,18 @@ interface MainLayoutProps {
   activeView: ActiveView;
   /** 导航切换回调（从 Workspace 传入） */
   onNavigate: (view: ActiveView) => void;
+  /** 右栏是否收起 */
+  rightPanelCollapsed: boolean;
+  /** 切换右栏收起/展开 */
+  onToggleRightPanel: (collapsed: boolean) => void;
 }
 
-export default function MainLayout({ activeView, onNavigate }: MainLayoutProps) {
+export default function MainLayout({
+  activeView,
+  onNavigate,
+  rightPanelCollapsed,
+  onToggleRightPanel,
+}: MainLayoutProps) {
   // 上传成功后递增，触发 VersionTree 重新拉取
   const [treeRefreshKey, setTreeRefreshKey] = useState(0);
   // 知识库上传 / 删除后递增，触发 KnowledgeStatus + KnowledgeView 刷新
@@ -81,6 +91,8 @@ export default function MainLayout({ activeView, onNavigate }: MainLayoutProps) 
         treeNodes={treeNodes}
         selectedNodeId={selectedNodeId}
         onSectionOrderUpdated={() => setSectionOrderVersion((v) => v + 1)}
+        onToggleRightPanel={onToggleRightPanel}
+        rightPanelCollapsed={rightPanelCollapsed}
       />
       <CenterPanel
         activeView={activeView}
@@ -96,15 +108,31 @@ export default function MainLayout({ activeView, onNavigate }: MainLayoutProps) 
         sectionOrderVersion={sectionOrderVersion}
         structuredJD={structuredJD}
       />
-      {/* 右栏始终可见：JD 截图分析 / Gap 报告 / AI 导师均在此栏，
-          无需随导航项切换（"职位截图分析"等导航仅影响中栏视图） */}
-      <RightPanel
-        resumeData={generatedResumeData}
-        onResumeGenerated={handleResumeGenerated}
-        templateId={selectedTemplateId}
-        treeNodes={treeNodes}
-        onJDAnalyzed={setStructuredJD}
-      />
+      {/* 右栏：收起时仅显示一个展开按钮条 */}
+      {rightPanelCollapsed ? (
+        <button
+          onClick={() => onToggleRightPanel(false)}
+          className="flex flex-col items-center justify-center bg-bg-secondary border-l border-border-default cursor-pointer hover:bg-bg-hover transition-colors group"
+          style={{ width: 32 }}
+          title="展开右栏（职位截图分析）"
+        >
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-text-tertiary group-hover:text-text-primary transition-colors">
+            <path d="M2 8h12M8 2l6 6-6 6" />
+          </svg>
+          <span className="text-[10px] text-text-tertiary group-hover:text-text-primary transition-colors mt-1" style={{ writingMode: 'vertical-rl' }}>
+            展开右栏
+          </span>
+        </button>
+      ) : (
+        <RightPanel
+          resumeData={generatedResumeData}
+          onResumeGenerated={handleResumeGenerated}
+          templateId={selectedTemplateId}
+          treeNodes={treeNodes}
+          onJDAnalyzed={setStructuredJD}
+          onCollapse={() => onToggleRightPanel(true)}
+        />
+      )}
     </div>
   );
 }

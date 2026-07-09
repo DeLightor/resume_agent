@@ -2,6 +2,7 @@
 // 工作台主页面，组合 GlobalToolbar + MainLayout
 //
 // US-21：activeView 提升到此层，同时传递给 GlobalToolbar 和 MainLayout
+// v1.4: rightPanelCollapsed — 点击"简历版本分支"时收起右栏
 
 import { useCallback, useState } from 'react';
 import GlobalToolbar from '@/components/layout/GlobalToolbar';
@@ -10,15 +11,30 @@ import type { ActiveView } from '@/types/knowledge';
 
 export default function Workspace() {
   const [activeView, setActiveView] = useState<ActiveView>('version-tree');
+  const [rightPanelCollapsed, setRightPanelCollapsed] = useState(false);
 
   const handleNavigate = useCallback((view: ActiveView) => {
     setActiveView(view);
+    // 切换到知识库时展开右栏（需要 JD 分析）
+    if (view === 'knowledge') {
+      setRightPanelCollapsed(false);
+    }
   }, []);
 
   return (
     <div className="h-screen overflow-hidden bg-bg-primary page-enter">
-      <GlobalToolbar activeView={activeView} onNavigate={handleNavigate} />
-      <MainLayout activeView={activeView} onNavigate={handleNavigate} />
+      <GlobalToolbar
+        activeView={activeView}
+        onNavigate={handleNavigate}
+        onToggleRightPanel={setRightPanelCollapsed}
+        rightPanelCollapsed={rightPanelCollapsed}
+      />
+      <MainLayout
+        activeView={activeView}
+        onNavigate={handleNavigate}
+        rightPanelCollapsed={rightPanelCollapsed}
+        onToggleRightPanel={setRightPanelCollapsed}
+      />
     </div>
   );
 }

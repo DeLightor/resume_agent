@@ -62,6 +62,10 @@ interface LeftPanelProps {
   selectedNodeId?: string | null;
   /** US-13: section_order 保存后通知外部更新 selectedNode */
   onSectionOrderUpdated?: (sections: SectionItem[]) => void;
+  /** 右栏是否收起 */
+  rightPanelCollapsed?: boolean;
+  /** 切换右栏收起/展开 */
+  onToggleRightPanel?: (collapsed: boolean) => void;
 }
 
 export default function LeftPanel({
@@ -73,6 +77,8 @@ export default function LeftPanel({
   treeNodes = [],
   selectedNodeId = null,
   onSectionOrderUpdated,
+  rightPanelCollapsed = false,
+  onToggleRightPanel,
 }: LeftPanelProps) {
   // 知识库文档数（从 KnowledgeStatus 回调获取）
   const [knowledgeDocCount, setKnowledgeDocCount] = useState(0);
@@ -86,12 +92,21 @@ export default function LeftPanel({
     { label: '个人知识库', icon: 'kb', view: 'knowledge', badge: knowledgeDocCount },
   ];
 
-  // 根据 activeView 决定高亮项：version-tree 高亮"总览面板"
+  // 根据 activeView 决定高亮项
+  // 右栏收起时高亮"简历版本分支"，展开时高亮"总览面板"
   const activeLabel =
-    activeView === 'knowledge' ? '个人知识库' : '总览面板';
+    activeView === 'knowledge' ? '个人知识库'
+      : rightPanelCollapsed ? '简历版本分支'
+      : '总览面板';
 
   function handleNavClick(item: NavItem) {
     onNavigate?.(item.view);
+    // "简历版本分支" → 收起右栏；"总览面板" → 展开右栏
+    if (item.label === '简历版本分支') {
+      onToggleRightPanel?.(true);
+    } else if (item.label === '总览面板') {
+      onToggleRightPanel?.(false);
+    }
   }
 
   return (

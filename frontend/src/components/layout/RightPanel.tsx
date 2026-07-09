@@ -25,6 +25,8 @@ interface RightPanelProps {
   treeNodes?: ResumeNode[];
   /** US-14: JD 分析成功后通知 MainLayout（用于一键生成） */
   onJDAnalyzed?: (structuredJD: Record<string, unknown> | null) => void;
+  /** 收起右栏回调 */
+  onCollapse?: () => void;
 }
 
 export default function RightPanel({
@@ -32,6 +34,7 @@ export default function RightPanel({
   templateId,
   treeNodes,
   onJDAnalyzed,
+  onCollapse,
 }: RightPanelProps) {
   // JD 分析结果（US-4）：null 时显示上传区，非 null 时显示 JDCard
   const [jdResult, setJdResult] = useState<JDAnalysisResult | null>(null);
@@ -52,9 +55,22 @@ export default function RightPanel({
 
   return (
     <aside
-      className="flex flex-col overflow-y-auto bg-bg-secondary border-l border-border-default"
+      className="flex flex-col overflow-y-auto bg-bg-secondary border-l border-border-default relative"
       style={{ width: 'var(--right-panel-width)', minWidth: 'var(--right-panel-width)' }}
     >
+      {/* 收起按钮 — 固定在右上角 */}
+      {onCollapse && (
+        <button
+          onClick={onCollapse}
+          className="absolute top-2 right-2 z-10 w-6 h-6 flex items-center justify-center rounded-md text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-colors cursor-pointer"
+          title="收起右栏"
+        >
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <path d="M10 2L4 8l6 6" />
+          </svg>
+        </button>
+      )}
+
       {/* Section 1: JD 分析 */}
       <section className="border-b border-border-subtle p-4">
         <div className="flex items-center gap-2 mb-3 text-sm font-semibold text-text-primary">
