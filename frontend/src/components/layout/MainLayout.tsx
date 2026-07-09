@@ -24,6 +24,8 @@ interface MainLayoutProps {
   rightPanelCollapsed: boolean;
   /** 切换右栏收起/展开 */
   onToggleRightPanel: (collapsed: boolean) => void;
+  /** 导航计数器：每次点击导航递增，用于强制重置中栏 activeTab */
+  navKey: number;
 }
 
 export default function MainLayout({
@@ -31,6 +33,7 @@ export default function MainLayout({
   onNavigate,
   rightPanelCollapsed,
   onToggleRightPanel,
+  navKey,
 }: MainLayoutProps) {
   // 上传成功后递增，触发 VersionTree 重新拉取
   const [treeRefreshKey, setTreeRefreshKey] = useState(0);
@@ -108,6 +111,7 @@ export default function MainLayout({
         sectionOrderVersion={sectionOrderVersion}
         structuredJD={structuredJD}
         onExpandRightPanel={() => onToggleRightPanel(false)}
+        navKey={navKey}
       />
       {/* 右栏：收起时仅显示一个展开按钮条 */}
       {rightPanelCollapsed ? (

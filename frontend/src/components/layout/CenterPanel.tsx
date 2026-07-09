@@ -59,6 +59,8 @@ interface CenterPanelProps {
   structuredJD?: Record<string, unknown> | null;
   /** 展开右栏回调（点击"为该岗位动态生成"时展开右栏） */
   onExpandRightPanel?: () => void;
+  /** 导航计数器：每次点击导航递增，强制重置 activeTab 到"版本树" */
+  navKey?: number;
 }
 
 /**
@@ -93,13 +95,14 @@ export default function CenterPanel({
   sectionOrderVersion = 0,
   structuredJD = null,
   onExpandRightPanel,
+  navKey = 0,
 }: CenterPanelProps) {
   const [activeTab, setActiveTab] = useState<string>('版本树');
 
-  // activeView 变化时重置 activeTab 到版本树（切换导航时回到版本树画布）
+  // navKey 变化时重置 activeTab 到版本树（每次点击导航项都触发）
   useEffect(() => {
     setActiveTab('版本树');
-  }, [activeView]);
+  }, [navKey]);
   const [selectedNode, setSelectedNode] = useState<ResumeNode | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   // US-17: 上游变更
