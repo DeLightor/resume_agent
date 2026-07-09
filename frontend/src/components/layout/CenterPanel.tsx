@@ -258,19 +258,20 @@ export default function CenterPanel({
 
   // US-22: 底部"为该岗位动态生成"按钮 → 切换到编辑器 Tab + 触发生成
   const handleBottomGenerate = useCallback(async () => {
+    // 无论什么情况，先切换到编辑器 Tab
+    setActiveTab('编辑器');
+
     if (!selectedNode) {
-      setGenerateMsg('请先选择一个节点');
-      setTimeout(() => setGenerateMsg(null), 3000);
+      setGenerateMsg('请先在版本树中选中一个分支节点');
+      setTimeout(() => setGenerateMsg(null), 4000);
       return;
     }
     if (!structuredJD) {
-      setGenerateMsg('请先在右栏上传 JD 招聘信息');
-      setTimeout(() => setGenerateMsg(null), 3000);
+      setGenerateMsg('请先在右栏上传岗位截图，分析完成后将自动生成简历');
+      setTimeout(() => setGenerateMsg(null), 4000);
       return;
     }
-    // 切换到编辑器 Tab
-    setActiveTab('编辑器');
-    // 触发生成
+    // 有 JD → 直接开始生成
     handleGenerateFull();
   }, [selectedNode, structuredJD, handleGenerateFull]);
 
@@ -605,7 +606,7 @@ export default function CenterPanel({
             </button>
             <button
               onClick={handleBottomGenerate}
-              disabled={!selectedNode || generating}
+              disabled={generating}
               className="inline-flex items-center gap-2 px-5 py-2 text-white text-sm font-medium border-none rounded-md cursor-pointer font-body transition-all hover:brightness-110 hover:-translate-y-px disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0"
               style={{
                 background:
@@ -624,7 +625,10 @@ export default function CenterPanel({
               )}
               {generating ? '生成中...' : '为该岗位动态生成'}
             </button>
-            <button className="inline-flex items-center gap-2 px-5 py-2 bg-transparent text-text-secondary text-sm font-medium border border-border-default rounded-md cursor-pointer transition-all font-body hover:border-border-strong hover:text-text-primary hover:bg-bg-hover">
+            <button
+              onClick={() => setActiveTab('Diff 对比')}
+              className="inline-flex items-center gap-2 px-5 py-2 bg-transparent text-text-secondary text-sm font-medium border border-border-default rounded-md cursor-pointer transition-all font-body hover:border-border-strong hover:text-text-primary hover:bg-bg-hover"
+            >
               <svg
                 width="14"
                 height="14"
