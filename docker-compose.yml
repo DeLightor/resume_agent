@@ -5,10 +5,5 @@ services:
       - "5173:5173"
     volumes:
       - ~/.resume-agent:/root/.resume-agent
-    environment:
-      - LLM_PROVIDER=${LLM_PROVIDER:-openai}
-      - LLM_API_KEY=${LLM_API_KEY:-}
-      - LLM_BASE_URL=${LLM_BASE_URL:-}
-      - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-openai}
-      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-3-small}
+    env_file: .env
     restart: unless-stopped
