@@ -33,18 +33,16 @@ sudo systemctl enable nginx
 # 5. 开放防火墙
 echo "[5/5] 开放防火墙端口..."
 if command -v ufw &> /dev/null; then
-    sudo ufw allow 80/tcp
-    sudo ufw allow 443/tcp
+    sudo ufw allow 8080/tcp
     sudo ufw reload
     echo "防火墙已配置"
 else
-    echo "ufw 未安装，请手动确认 80/443 端口已开放"
+    echo "ufw 未安装，请手动确认 8080 端口已开放"
 fi
 
 echo ""
 echo "===== 部署完成 ====="
-echo "访问 http://xmutlhj.eu.cc 验证"
+echo "访问 http://xmutlhj.eu.cc:8080 验证"
 echo ""
-echo "如需配置 HTTPS，运行:"
-echo "  sudo apt install -y certbot python3-certbot-nginx"
-echo "  sudo certbot --nginx -d xmutlhj.eu.cc -d www.xmutlhj.eu.cc"
+echo "注意: 国内服务器未备案域名无法使用 80/443 端口"
+echo "当前使用 8080 端口，如需 HTTPS 需先完成 ICP 备案"
