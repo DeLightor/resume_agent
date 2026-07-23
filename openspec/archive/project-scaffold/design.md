@@ -754,10 +754,10 @@ export default defineConfig({
 
 迁移后需验证设计稿令牌与 Tailwind 工具类渲染结果一致：
 
-- [ ] `bg-bg-primary` 渲染色值 = `#fafbfc`
-- [ ] `text-text-secondary` 渲染色值 = `#475569`
-- [ ] `bg-node-master` 渲染色值 = `#0891b2`
-- [ ] `font-mono` 实际字体栈包含 `JetBrains Mono`
+- [x] `bg-bg-primary` 渲染色值 = `#fafbfc`
+- [x] `text-text-secondary` 渲染色值 = `#475569`
+- [x] `bg-node-master` 渲染色值 = `#0891b2`
+- [x] `font-mono` 实际字体栈包含 `JetBrains Mono`
 
 ---
 
@@ -916,33 +916,33 @@ async def spa_fallback(full_path: str):
 本变更完成后，按以下清单逐项验证：
 
 ### 12.1 后端验证
-- [ ] `uv run python -c "import resume_agent"` 无报错
-- [ ] `uv run ruff check .` 零错误
-- [ ] `uv run mypy src/resume_agent` 零错误
-- [ ] `uv run pytest` 通过（含建表测试 + import 测试）
-- [ ] 启动后 `~/.resume-agent/data.db` 自动创建且含 3 张表
-- [ ] 启动后 `~/.resume-agent/chroma/` 目录存在
-- [ ] `GET /api/health` 返回 200 且 db/chroma 状态为 ready
+- [x] `uv run python -c "import resume_agent"` 无报错
+- [x] `uv run ruff check .` 零错误
+- [x] `uv run mypy src/resume_agent` 零错误
+- [x] `uv run pytest` 通过（含建表测试 + import 测试）
+- [x] 启动后 `~/.resume-agent/data.db` 自动创建且含 3 张表
+- [x] 启动后 `~/.resume-agent/chroma/` 目录存在
+- [x] `GET /api/health` 返回 200 且 db/chroma 状态为 ready
 
 ### 12.2 前端验证
-- [ ] `pnpm typecheck` 零错误
-- [ ] `pnpm lint` 零错误
-- [ ] `pnpm build` 成功产出 `dist/`
-- [ ] `pnpm dev` 后 `localhost:5173` 可访问 workspace 页面
-- [ ] 三栏布局可见，配色与设计稿一致
-- [ ] React Flow 画布渲染 mock 版本树（3 种节点形态）
+- [x] `pnpm typecheck` 零错误
+- [x] `pnpm lint` 零错误
+- [x] `pnpm build` 成功产出 `dist/`
+- [x] `pnpm dev` 后 `localhost:5173` 可访问 workspace 页面
+- [x] 三栏布局可见，配色与设计稿一致
+- [x] React Flow 画布渲染 mock 版本树（3 种节点形态）
 
 ### 12.3 部署验证
-- [ ] `docker compose build` 成功
-- [ ] `docker compose up` 后 5173 端口可访问
-- [ ] Docker 镜像大小 ≤ 500MB
-- [ ] 容器删除后 `~/.resume-agent/` 数据保留
-- [ ] `.env.example` 列出全部环境变量
+- [x] `docker compose build` 成功
+- [x] `docker compose up` 后 5173 端口可访问
+- [x] Docker 镜像大小 ≤ 500MB
+- [x] 容器删除后 `~/.resume-agent/` 数据保留
+- [x] `.env.example` 列出全部环境变量
 
 ### 12.4 设计令牌验证
-- [ ] `bg-bg-primary` 渲染色值 = `#fafbfc`
-- [ ] `bg-node-master` 渲染色值 = `#0891b2`
-- [ ] 设计稿 HTML 与 React 组件配色视觉一致
+- [x] `bg-bg-primary` 渲染色值 = `#fafbfc`
+- [x] `bg-node-master` 渲染色值 = `#0891b2`
+- [x] 设计稿 HTML 与 React 组件配色视觉一致
 
 ---
 
