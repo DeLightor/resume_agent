@@ -87,36 +87,36 @@ project-scaffold（本变更）
 
 ### 5.1 工程可运行
 
-- [ ] `make install` 在 macOS / Ubuntu 上无报错完成依赖安装
-- [ ] `make dev` 启动后 `localhost:5173` 返回 workspace 页面（HTTP 200）
-- [ ] `docker compose up` 一键启动后，5173 端口可访问前端
-- [ ] Docker 镜像大小 ≤ 500MB（多阶段构建剔除构建依赖）
+- [x] `make install` 在 macOS / Ubuntu 上无报错完成依赖安装
+- [x] `make dev` 启动后 `localhost:5173` 返回 workspace 页面（HTTP 200）
+- [x] `docker compose up` 一键启动后，5173 端口可访问前端
+- [x] Docker 镜像大小 ≤ 500MB（多阶段构建剔除构建依赖）
 
 ### 5.2 数据库就绪
 
-- [ ] SQLite 在 `~/.resume-agent/data.db` 自动创建
-- [ ] `resume_versions` `knowledge_chunks` `upload_records` 三张表存在且 schema 正确
-- [ ] Chroma 在 `~/.resume-agent/chroma/` 完成嵌入式初始化，无独立 server 进程
+- [x] SQLite 在 `~/.resume-agent/data.db` 自动创建
+- [x] `resume_versions` `knowledge_chunks` `upload_records` 三张表存在且 schema 正确
+- [x] Chroma 在 `~/.resume-agent/chroma/` 完成嵌入式初始化，无独立 server 进程
 
 ### 5.3 前端可渲染
 
-- [ ] workspace 页面三栏布局可见（GlobalToolbar + LeftPanel + CenterPanel + RightPanel）
-- [ ] 静态 mock 版本树在 React Flow 画布中渲染（master / 分支 / 公司 三种节点形态）
-- [ ] 设计令牌生效：背景色、文字色、节点配色与 `colors_and_type.css` 一致
+- [x] workspace 页面三栏布局可见（GlobalToolbar + LeftPanel + CenterPanel + RightPanel）
+- [x] 静态 mock 版本树在 React Flow 画布中渲染（master / 分支 / 公司 三种节点形态）
+- [x] 设计令牌生效：背景色、文字色、节点配色与 `colors_and_type.css` 一致
 
 ### 5.4 质量门禁
 
-- [ ] `pnpm typecheck` 零错误
-- [ ] `pnpm build` 成功产出 `dist/`
-- [ ] `uv run ruff check .` 零错误
-- [ ] `uv run mypy src/resume_agent` 零错误
-- [ ] 后端 import test 通过：`python -c "import resume_agent"` 无报错
+- [x] `pnpm typecheck` 零错误
+- [x] `pnpm build` 成功产出 `dist/`
+- [x] `uv run ruff check .` 零错误
+- [x] `uv run mypy src/resume_agent` 零错误
+- [x] 后端 import test 通过：`python -c "import resume_agent"` 无报错
 
 ### 5.5 配置与文档
 
-- [ ] `.env.example` 列出全部环境变量及说明
-- [ ] `README.md` 包含 5 行命令的快速开始
-- [ ] `docs/architecture.md` 描述单容器部署架构
+- [x] `.env.example` 列出全部环境变量及说明
+- [x] `README.md` 包含 5 行命令的快速开始
+- [x] `docs/architecture.md` 描述单容器部署架构
 
 ---
 
@@ -180,10 +180,10 @@ project-scaffold（本变更）
 
 回滚后执行以下检查确认状态：
 
-- [ ] `git status` 显示工作区干净（无残留新增文件）
-- [ ] `resume-agent-workspace/colors_and_type.css` 内容未变
-- [ ] `resume-agent-workspace/pages/workspace.html` 内容未变
-- [ ] `PRD.md` 内容未变
+- [x] `git status` 显示工作区干净（无残留新增文件）
+- [x] `resume-agent-workspace/colors_and_type.css` 内容未变
+- [x] `resume-agent-workspace/pages/workspace.html` 内容未变
+- [x] `PRD.md` 内容未变
 
 ### 7.3 回滚风险评估
 
