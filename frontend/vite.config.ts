@@ -15,7 +15,8 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',
+        // 启动台通过 VITE_API_TARGET 注入后端地址，默认保留原端口
+        target: process.env.VITE_API_TARGET || 'http://localhost:8000',
         changeOrigin: true,
       },
     },
