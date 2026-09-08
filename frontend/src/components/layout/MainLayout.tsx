@@ -14,6 +14,7 @@ import CenterPanel from './CenterPanel';
 import RightPanel from './RightPanel';
 import type { ActiveView } from '@/types/knowledge';
 import type { ResumeNode } from '@/types/tree';
+import type { GapReport } from '@/types/gap';
 
 interface MainLayoutProps {
   /** 当前激活的视图（从 Workspace 传入） */
@@ -26,6 +27,14 @@ interface MainLayoutProps {
   onToggleRightPanel: (collapsed: boolean) => void;
   /** 导航计数器：每次点击导航递增，用于强制重置中栏 activeTab */
   navKey: number;
+}
+
+/** US-29：待自动发送的快捷指令（MainLayout → CenterPanel → AgentWorkbench） */
+export interface PendingAsk {
+  /** 带最新工作台上下文组装的 context */
+  context: Record<string, unknown>;
+  /** 首条消息 */
+  prompt: string;
 }
 
 export default function MainLayout({
@@ -53,6 +62,10 @@ export default function MainLayout({
   const [sectionOrderVersion, setSectionOrderVersion] = useState(0);
   /** US-14: JD 分析结果（结构化），用于一键生成 */
   const [structuredJD, setStructuredJD] = useState<Record<string, unknown> | null>(null);
+  /** US-29：Gap 报告提升（供 AI 快捷指令组装上下文） */
+  const [gapReport, setGapReport] = useState<GapReport | null>(null);
+  /** US-29：待自动发送的快捷指令（切到 AI 视图后由 AgentWorkbench 消费） */
+  const [pendingAsk, setPendingAsk] = useState<PendingAsk | null>(null);
 
   const handleTreeRefresh = useCallback(() => {
     setTreeRefreshKey((k) => k + 1);
@@ -79,6 +92,47 @@ export default function MainLayout({
   const handleTreeNodesUpdate = useCallback((nodes: ResumeNode[]) => {
     setTreeNodes(nodes);
   }, []);
+
+  /**
+   * US-29：组装工作台上下文（供 Agent 对话注入）。
+   * - structured_jd 只保留五个结构化字段（不传 raw_text，控制 token）
+   * - gap_report 转摘要（overall_score + 三色计数 + missing 技能列表）
+   */
+  const buildAgentContext = useCallback((): Record<string, unknown> => {
+    const ctx: Record<string, unknown> = {};
+    if (selectedNodeId) ctx.current_node_id = selectedNodeId;
+    if (structuredJD) {
+      const jd = structuredJD as Record<string, unknown>;
+      const trimmed: Record<string, unknown> = {};
+      for (const key of [
+        'job_title', 'tech_stack', 'hard_skills', 'soft_skills', 'bonus_items',
+      ]) {
+        if (jd[key] != null) trimmed[key] = jd[key];
+      }
+      if (Object.keys(trimmed).length > 0) ctx.structured_jd = trimmed;
+    }
+    if (gapReport) {
+      const missing = gapReport.items
+        .filter((item) => item.status === 'missing')
+        .map((item) => item.skill)
+        .slice(0, 8);
+      ctx.gap_summary = {
+        overall_score: gapReport.overall_score,
+        missing,
+        missing_count: missing.length,
+      };
+    }
+    return ctx;
+  }, [selectedNodeId, structuredJD, gapReport]);
+
+  /** US-29：AI 快捷指令 → 切 AI 视图 + 带上下文自动发送 */
+  const handleQuickAsk = useCallback(
+    (prompt: string) => {
+      setPendingAsk({ context: buildAgentContext(), prompt });
+      onNavigate('agent');
+    },
+    [buildAgentContext, onNavigate],
+  );
 
   return (
     <div
@@ -112,6 +166,9 @@ export default function MainLayout({
         structuredJD={structuredJD}
         onExpandRightPanel={() => onToggleRightPanel(false)}
         navKey={navKey}
+        agentContext={buildAgentContext}
+        pendingAsk={pendingAsk}
+        onPendingAskConsumed={() => setPendingAsk(null)}
       />
       {/* 右栏：收起时仅显示一个展开按钮条 */}
       {rightPanelCollapsed ? (
@@ -135,6 +192,9 @@ export default function MainLayout({
           templateId={selectedTemplateId}
           treeNodes={treeNodes}
           onJDAnalyzed={setStructuredJD}
+          gapReport={gapReport}
+          onGapReport={setGapReport}
+          onQuickAsk={handleQuickAsk}
           onCollapse={() => onToggleRightPanel(true)}
         />
       )}

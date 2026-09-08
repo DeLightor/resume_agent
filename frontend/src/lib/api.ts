@@ -522,6 +522,11 @@ export interface StreamAgentChatOptions {
   onEvent: (event: AgentEvent) => void;
   /** 中断信号（组件卸载 / 用户取消） */
   signal?: AbortSignal;
+  /**
+   * US-29 工作台上下文（可选）：与会话已存 context 不同时服务端更新
+   * 并追加「上下文已更新」system 消息。不传则不更新。
+   */
+  context?: Record<string, unknown>;
 }
 
 /**
@@ -553,7 +558,11 @@ export async function streamAgentChat(
   const res = await fetch(`${BASE_URL}/agent/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session_id: sessionId, message }),
+    body: JSON.stringify({
+      session_id: sessionId,
+      message,
+      ...(options.context !== undefined && { context: options.context }),
+    }),
     signal: options.signal,
   });
 

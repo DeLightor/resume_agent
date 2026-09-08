@@ -25,32 +25,63 @@ interface RightPanelProps {
   treeNodes?: ResumeNode[];
   /** US-14: JD 分析成功后通知 MainLayout（用于一键生成） */
   onJDAnalyzed?: (structuredJD: Record<string, unknown> | null) => void;
+  /** US-29：Gap 报告提升到 MainLayout（供 AI 快捷指令组装上下文） */
+  gapReport: GapReport | null;
+  onGapReport: (report: GapReport | null) => void;
+  /** US-29：AI 快捷指令入口（带工作台上下文发起对话） */
+  onQuickAsk: (prompt: string) => void;
   /** 收起右栏回调 */
   onCollapse?: () => void;
 }
+
+/** US-29：PRD 验收场景的固定快捷指令 */
+const QUICK_PROMPTS: { label: string; prompt: string }[] = [
+  {
+    label: '针对当前 JD 优化选中节点',
+    prompt: '帮我针对已上传的 JD 优化当前选中节点的项目经历，基于知识库素材，不要编造。',
+  },
+  {
+    label: '我的经历太少怎么办',
+    prompt: '对照我的知识库素材和已上传的 JD，分析我的经历太少的问题，并给出可补充的方向。',
+  },
+  {
+    label: '把选中节点改得更量化',
+    prompt: '把当前选中节点的内容改得更量化：为每条经历补充可验证的数字，缺的先问我，不要编造。',
+  },
+];
 
 export default function RightPanel({
   onResumeGenerated,
   templateId,
   treeNodes,
   onJDAnalyzed,
+  gapReport,
+  onGapReport,
+  onQuickAsk,
   onCollapse,
 }: RightPanelProps) {
   // JD 分析结果（US-4）：null 时显示上传区，非 null 时显示 JDCard
   const [jdResult, setJdResult] = useState<JDAnalysisResult | null>(null);
-  // Gap 报告结果（US-11）：供 TutorView 使用
-  const [gapReport, setGapReport] = useState<GapReport | null>(null);
+  // US-29：自定义快捷指令输入
+  const [customPrompt, setCustomPrompt] = useState('');
 
   function handleJDAnalyzed(result: JDAnalysisResult) {
     setJdResult(result);
-    setGapReport(null); // 重新分析 JD 时重置 Gap 报告
+    onGapReport(null); // 重新分析 JD 时重置 Gap 报告
     onJDAnalyzed?.(result.structured ? { ...result.structured } : null);
   }
 
   function handleReset() {
     setJdResult(null);
-    setGapReport(null);
+    onGapReport(null);
     onJDAnalyzed?.(null);
+  }
+
+  function handleCustomSubmit() {
+    const text = customPrompt.trim();
+    if (!text) return;
+    onQuickAsk(text);
+    setCustomPrompt('');
   }
 
   return (
@@ -125,8 +156,57 @@ export default function RightPanel({
         </div>
         <GapReportView
           structuredJD={(jdResult?.structured ?? null) as Record<string, unknown> | null}
-          onReport={setGapReport}
+          onReport={onGapReport}
         />
+      </section>
+
+      {/* Section 2.7: AI 快捷指令（US-29 对话式工作台入口） */}
+      <section className="border-b border-border-subtle p-4">
+        <div className="flex items-center gap-2 mb-3 text-sm font-semibold text-text-primary">
+          <svg
+            className="w-4 h-4 opacity-70"
+            viewBox="0 0 16 16"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            style={{ color: 'var(--color-brand-primary)' }}
+          >
+            <path d="M14 7.5c0 3-2.7 5.5-6 5.5-.7 0-1.4-.1-2-.3L2 14l1-3.2c-.6-.9-1-2-1-3.3 0-3 2.7-5.5 6-5.5s6 2.5 6 5.5z" />
+          </svg>
+          AI 快捷指令
+        </div>
+        <div className="flex flex-col gap-1.5">
+          {QUICK_PROMPTS.map((qp) => (
+            <button
+              key={qp.label}
+              type="button"
+              onClick={() => onQuickAsk(qp.prompt)}
+              className="text-left text-xs px-3 py-2 rounded-md border border-border-default text-text-secondary bg-bg-elevated cursor-pointer transition-all duration-200 hover:border-brand-primary hover:text-brand-primary hover:translate-x-0.5 font-body"
+            >
+              {qp.label}
+            </button>
+          ))}
+          <div className="flex gap-1.5 mt-1">
+            <input
+              value={customPrompt}
+              onChange={(e) => setCustomPrompt(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleCustomSubmit()}
+              placeholder="自定义问题…"
+              className="flex-1 min-w-0 text-xs px-2.5 py-2 rounded-md border border-border-default bg-bg-elevated text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-brand-primary transition-colors duration-200 font-body"
+            />
+            <button
+              type="button"
+              onClick={handleCustomSubmit}
+              disabled={!customPrompt.trim()}
+              className="text-xs px-2.5 py-2 rounded-md border border-border-default text-text-secondary bg-bg-elevated cursor-pointer transition-all duration-200 hover:border-brand-primary hover:text-brand-primary disabled:opacity-40 disabled:cursor-not-allowed font-body"
+              title="发给 AI 助手"
+            >
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <path d="M2 8l12-5-5 12-2-5-5-2z" />
+              </svg>
+            </button>
+          </div>
+        </div>
       </section>
 
       {/* Section 2.5: AI 导师学习建议（US-11） */}

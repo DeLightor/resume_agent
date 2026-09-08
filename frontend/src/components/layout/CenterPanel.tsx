@@ -62,6 +62,12 @@ interface CenterPanelProps {
   onExpandRightPanel?: () => void;
   /** 导航计数器：每次点击导航递增，强制重置 activeTab 到"版本树" */
   navKey?: number;
+  /** US-29：工作台上下文提供者（透传给 AgentWorkbench，send 时携带） */
+  agentContext?: () => Record<string, unknown>;
+  /** US-29：待自动发送的快捷指令（右栏入口触发） */
+  pendingAsk?: import('./MainLayout').PendingAsk | null;
+  /** US-29：快捷指令已被 AgentWorkbench 消费（清除 MainLayout 状态） */
+  onPendingAskConsumed?: () => void;
 }
 
 /**
@@ -97,6 +103,9 @@ export default function CenterPanel({
   structuredJD = null,
   onExpandRightPanel,
   navKey = 0,
+  agentContext,
+  pendingAsk = null,
+  onPendingAskConsumed,
 }: CenterPanelProps) {
   const [activeTab, setActiveTab] = useState<string>('版本树');
 
@@ -373,10 +382,15 @@ export default function CenterPanel({
   }
 
   // AI 助手视图（US-28）：渲染 AgentWorkbench（对话 + 行为时间线）
+  // US-29：透传工作台上下文与快捷指令（pendingAsk 自动发送）
   if (activeView === 'agent') {
     return (
       <main className="flex-1 flex flex-col overflow-hidden bg-bg-primary">
-        <AgentWorkbench />
+        <AgentWorkbench
+          agentContext={agentContext}
+          pendingAsk={pendingAsk}
+          onPendingAskConsumed={onPendingAskConsumed}
+        />
       </main>
     );
   }

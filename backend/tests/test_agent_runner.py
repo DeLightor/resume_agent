@@ -120,6 +120,39 @@ def test_run_injects_user_message(initialized_db: Any) -> None:
     assert user_msgs[-1]["content"] == "帮我优化简历"
 
 
+def test_run_continues_done_session(initialized_db: Any) -> None:
+    """US-29：done 会话收到新用户消息时续聊（而非报错）。
+
+    对话式工作台要求自然连续对话：用户在 Agent 完成回答后继续
+    发消息（如「算了我先不改了」）应正常回复。历史消息保留。
+    """
+    session = store.create_session(db_path=initialized_db)
+    llm = _ScriptedLLM([_msg("第一轮回答"), _msg("第二轮回答")])
+    runner = AgentRunner(
+        llm=llm, registry=_registry_with_echo(), db_path=initialized_db
+    )
+
+    # 第一轮：正常完成 → done
+    result1 = _run(runner.run(session.id, user_message="帮我优化"))
+    assert result1.status == "done"
+
+    # 第二轮：done 会话继续发消息 → 不报错，正常续聊
+    result2 = _run(runner.run(session.id, user_message="算了我先不改了"))
+    assert result2.status == "done"
+    assert result2.final_message == "第二轮回答"
+
+    # 历史完整保留：两轮 user + 两轮 assistant + system
+    fetched = store.get_session(session.id, initialized_db)
+    assert fetched is not None
+    assert fetched.status == "done"
+    user_msgs = [m for m in fetched.messages if m["role"] == "user"]
+    assert [m["content"] for m in user_msgs] == ["帮我优化", "算了我先不改了"]
+    assistant_msgs = [m for m in fetched.messages if m["role"] == "assistant"]
+    assert [m["content"] for m in assistant_msgs] == [
+        "第一轮回答", "第二轮回答",
+    ]
+
+
 # === 4.2 多轮工具调用 ===
 
 

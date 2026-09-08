@@ -10,6 +10,8 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
+from resume_agent.agents import store
+
 
 def _init_db() -> None:
     from resume_agent.config import settings
@@ -433,6 +435,171 @@ def test_chat_background_run_converges_session_state(monkeypatch: Any) -> None:
     from resume_agent.agents import store
     session = store.get_session(created["id"])
     assert session is not None
+
+
+# === POST /api/agent/chat context 注入（US-29 agent-context-integration）===
+
+
+def _ctx_script_runner(monkeypatch: Any) -> None:
+    """mock Runner 记录收到的消息历史（验证 context 注入进对话）。"""
+    from resume_agent.agents.runner import AgentRunResult
+
+    received: dict[str, Any] = {}
+
+    class _FakeRunner:
+        llm = None
+
+        async def run(
+            self,
+            session_id: str,
+            user_message: str | None = None,
+            on_event: Any = None,
+        ):
+            session = store.get_session(session_id)
+            received["messages"] = list(session.messages) if session else []
+            if on_event is not None:
+                await on_event({"type": "done", "status": "done",
+                                "final_message": "ok", "rounds_used": 1})
+            return AgentRunResult(status="done", final_message="ok")
+
+        async def resume(
+            self, session_id: str, answer: str, on_event: Any = None
+        ):
+            return AgentRunResult(status="done", final_message="ok")
+
+    monkeypatch.setattr("resume_agent.api.agent.AgentRunner", _FakeRunner)
+    monkeypatch.setattr("resume_agent.api.agent._received_ctx", received,
+                        raising=False)
+
+
+def test_chat_updates_session_context(monkeypatch: Any) -> None:
+    """chat 带 context（与会话不同）→ 更新 context + 追加上下文 system 消息。"""
+    _init_db()
+    from resume_agent.main import app
+
+    _ctx_script_runner(monkeypatch)
+    client = TestClient(app)
+    created = client.post("/api/agent/sessions", json={}).json()["data"]
+
+    ctx = {"current_node_id": "branch-安全",
+           "structured_jd": {"job_title": "后端工程师"},
+           "gap_summary": {"overall_score": 0.4, "missing": ["Go"]}}
+    client.post("/api/agent/chat", json={
+        "session_id": created["id"], "message": "帮我优化", "context": ctx,
+    })
+
+    # 会话 context 已更新并持久化
+    session = store.get_session(created["id"])
+    assert session is not None
+    assert session.context == ctx
+    # 消息历史出现上下文 system 消息（Runner run 前已追加）
+    from resume_agent.api import agent as agent_module
+    messages = getattr(agent_module, "_received_ctx", {}).get("messages", [])
+    ctx_msgs = [m for m in messages if m.get("role") == "system"
+                and "上下文已更新" in (m.get("content") or "")]
+    assert len(ctx_msgs) == 1
+    assert "branch-安全" in ctx_msgs[0]["content"]
+
+
+def test_chat_same_context_idempotent(monkeypatch: Any) -> None:
+    """chat 带 context（与会话相同）→ 不追加 system 消息（幂等）。"""
+    _init_db()
+    from resume_agent.main import app
+
+    _ctx_script_runner(monkeypatch)
+    client = TestClient(app)
+    created = client.post(
+        "/api/agent/sessions",
+        json={"context": {"current_node_id": "branch-安全"}},
+    ).json()["data"]
+
+    client.post("/api/agent/chat", json={
+        "session_id": created["id"],
+        "message": "hi",
+        "context": {"current_node_id": "branch-安全"},
+    })
+
+    from resume_agent.api import agent as agent_module
+    messages = getattr(agent_module, "_received_ctx", {}).get("messages", [])
+    ctx_msgs = [m for m in messages if m.get("role") == "system"
+                and "上下文已更新" in (m.get("content") or "")]
+    # 首次会话创建时的 context 注入由 runner 机制处理（此处 mock 绕过），
+    # chat 层只在 context 变化时追加 → 相同 context 不追加
+    assert len(ctx_msgs) == 0
+
+
+def test_chat_context_change_appends_new_message(monkeypatch: Any) -> None:
+    """会话中途 context 变化（切节点）→ 追加更新消息。"""
+    _init_db()
+    from resume_agent.main import app
+
+    _ctx_script_runner(monkeypatch)
+    client = TestClient(app)
+    created = client.post(
+        "/api/agent/sessions",
+        json={"context": {"current_node_id": "branch-安全"}},
+    ).json()["data"]
+
+    client.post("/api/agent/chat", json={
+        "session_id": created["id"],
+        "message": "换个节点",
+        "context": {"current_node_id": "branch-后端"},
+    })
+
+    session = store.get_session(created["id"])
+    assert session is not None
+    assert session.context == {"current_node_id": "branch-后端"}
+    from resume_agent.api import agent as agent_module
+    messages = getattr(agent_module, "_received_ctx", {}).get("messages", [])
+    ctx_msgs = [m for m in messages if m.get("role") == "system"
+                and "上下文已更新" in (m.get("content") or "")]
+    assert len(ctx_msgs) == 1
+    assert "branch-后端" in ctx_msgs[0]["content"]
+
+
+def test_chat_context_null_field_clears_key(monkeypatch: Any) -> None:
+    """context 中 null 字段表示清除该上下文项。"""
+    _init_db()
+    from resume_agent.main import app
+
+    _ctx_script_runner(monkeypatch)
+    client = TestClient(app)
+    created = client.post(
+        "/api/agent/sessions",
+        json={"context": {"current_node_id": "branch-安全",
+                          "structured_jd": {"job_title": "后端"}}},
+    ).json()["data"]
+
+    client.post("/api/agent/chat", json={
+        "session_id": created["id"],
+        "message": "清空 JD",
+        "context": {"current_node_id": "branch-安全", "structured_jd": None},
+    })
+
+    session = store.get_session(created["id"])
+    assert session is not None
+    assert session.context == {"current_node_id": "branch-安全"}
+
+
+def test_chat_without_context_unchanged(monkeypatch: Any) -> None:
+    """不带 context → 会话 context 保持不变（向后兼容）。"""
+    _init_db()
+    from resume_agent.main import app
+
+    _ctx_script_runner(monkeypatch)
+    client = TestClient(app)
+    created = client.post(
+        "/api/agent/sessions",
+        json={"context": {"current_node_id": "branch-安全"}},
+    ).json()["data"]
+
+    client.post("/api/agent/chat", json={
+        "session_id": created["id"], "message": "hi",
+    })
+
+    session = store.get_session(created["id"])
+    assert session is not None
+    assert session.context == {"current_node_id": "branch-安全"}
 
 
 def test_chat_emits_error_event_on_runner_exception(monkeypatch: Any) -> None:

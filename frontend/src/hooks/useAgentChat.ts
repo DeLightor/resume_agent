@@ -23,8 +23,14 @@ export interface UserMessageEvent {
   text: string;
 }
 
-/** 时间线渲染事件：SSE 事件 + 本地用户消息 */
-export type TimelineEvent = AgentEvent | UserMessageEvent;
+/** 历史会话回放的 assistant 消息（本地构造，不来自 SSE 协议） */
+export interface AssistantMessageEvent {
+  type: 'assistant_message';
+  text: string;
+}
+
+/** 时间线渲染事件：SSE 事件 + 本地回放消息 */
+export type TimelineEvent = AgentEvent | UserMessageEvent | AssistantMessageEvent;
 
 /** 单条时间线渲染单元（事件 + 本地时间戳） */
 export interface TimelineItem {
@@ -52,12 +58,23 @@ export interface UseAgentChat {
   phase: ChatPhase;
   /** 流式/网络错误信息 */
   error: string | null;
-  /** 新建会话 */
-  newSession: () => Promise<void>;
+  /** 当前会话绑定的上下文（创建/更新时记录，用于状态条显示） */
+  sessionContext: Record<string, unknown> | null;
+  /** 新建会话（US-29：可带初始上下文） */
+  newSession: (context?: Record<string, unknown>) => Promise<void>;
   /** 切换历史会话（恢复视图） */
   selectSession: (sessionId: string) => Promise<void>;
   /** 发送消息（或回答 ask_user）；返回是否真正发出 */
   send: (message: string) => Promise<boolean>;
+}
+
+/** useAgentChat 参数（US-29） */
+export interface UseAgentChatArgs {
+  /**
+   * 工作台上下文提供者：每次 send 时调用取最新值
+   * （当前节点/JD/Gap 摘要），服务端幂等去重，未变化不重复注入。
+   */
+  getContext?: () => Record<string, unknown>;
 }
 
 /** 断线后轮询会话详情的间隔 */
@@ -65,7 +82,7 @@ const RECONNECT_POLL_MS = 2000;
 /** 恢复轮询上限（30 × 2s = 60s），超时提示用户稍后查看 */
 const RECONNECT_MAX_ATTEMPTS = 30;
 
-export function useAgentChat(): UseAgentChat {
+export function useAgentChat(args?: UseAgentChatArgs): UseAgentChat {
   const [sessions, setSessions] = useState<AgentSessionSummary[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [sessionStatus, setSessionStatus] = useState<string | null>(null);
@@ -74,12 +91,18 @@ export function useAgentChat(): UseAgentChat {
   const [finalMessage, setFinalMessage] = useState<string | null>(null);
   const [phase, setPhase] = useState<ChatPhase>('idle');
   const [error, setError] = useState<string | null>(null);
+  const [sessionContext, setSessionContext] = useState<
+    Record<string, unknown> | null
+  >(null);
 
   const nextId = useRef(1);
   const abortRef = useRef<AbortController | null>(null);
   const creatingRef = useRef(false);
   /** 当前活跃会话（供 recover 轮询检测会话切换） */
   const activeIdRef = useRef<string | null>(null);
+  /** 上下文提供者（ref 保持最新，避免 send 依赖重建） */
+  const getContextRef = useRef(args?.getContext);
+  getContextRef.current = args?.getContext;
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -119,7 +142,7 @@ export function useAgentChat(): UseAgentChat {
         break;
       case 'error':
         setSessionStatus('failed');
-        setError(event.message);
+        // 错误详情由时间线 error 事件渲染（避免与底部 error 文字双重显示）
         break;
       default:
         break;
@@ -160,16 +183,17 @@ export function useAgentChat(): UseAgentChat {
     [],
   );
 
-  const newSession = useCallback(async () => {
+  const newSession = useCallback(async (context?: Record<string, unknown>) => {
     // StrictMode 双挂载 / 连点保护：避免创建两个会话
     if (creatingRef.current) return;
     creatingRef.current = true;
     try {
       abortRef.current?.abort();
-      const created = await createAgentSession();
+      const created = await createAgentSession(context ?? {});
       setActiveSessionId(created.id);
       activeIdRef.current = created.id;
       setSessionStatus(created.status);
+      setSessionContext(context ?? null);
       setTimeline([]);
       setPendingQuestion(null);
       setFinalMessage(null);
@@ -191,11 +215,29 @@ export function useAgentChat(): UseAgentChat {
       setActiveSessionId(sessionId);
       activeIdRef.current = sessionId;
       setSessionStatus(detail.status);
+      setSessionContext(detail.context ?? null);
       setPendingQuestion(detail.pending_question);
       const last = detail.messages[detail.messages.length - 1];
       setFinalMessage(last?.role === 'assistant' ? last.content : null);
-      // 历史会话不再重放工具轨迹（traces 端点可后续按需展示）
-      setTimeline([]);
+      // US-29：回放对话历史（用户气泡 + assistant 回复），
+      // 工具轨迹不重放（原文案保留，traces 端点可后续按需展示）
+      const rebuilt: TimelineItem[] = [];
+      for (const m of detail.messages) {
+        if (m.role === 'user' && m.content) {
+          rebuilt.push({
+            id: nextId.current++,
+            event: { type: 'user_message', text: m.content },
+            ts: 0,
+          });
+        } else if (m.role === 'assistant' && m.content) {
+          rebuilt.push({
+            id: nextId.current++,
+            event: { type: 'assistant_message', text: m.content },
+            ts: 0,
+          });
+        }
+      }
+      setTimeline(rebuilt);
       setError(null);
       setPhase('idle');
     },
@@ -204,7 +246,10 @@ export function useAgentChat(): UseAgentChat {
 
   const send = useCallback(
     async (message: string): Promise<boolean> => {
-      if (!activeSessionId || !message.trim() || phase === 'streaming') {
+      // 用 ref 读最新会话 id（pendingAsk 流程中 newSession 刚完成时，
+      // 本闭包捕获的 activeSessionId 可能还是 null —— stale closure）
+      const sessionId = activeIdRef.current;
+      if (!sessionId || !message.trim() || phase === 'streaming') {
         return false;
       }
 
@@ -226,11 +271,14 @@ export function useAgentChat(): UseAgentChat {
       setError(null);
 
       try {
-        await streamAgentChat(activeSessionId, message, {
+        await streamAgentChat(sessionId, message, {
           signal: controller.signal,
           onEvent: handleEvent,
+          // US-29：每次发送携带最新工作台上下文（服务端幂等去重）
+          context: getContextRef.current?.(),
         });
         setPhase('idle');
+        setSessionContext(getContextRef.current?.() ?? null);
         void refreshSessions();
       } catch (err) {
         // 用户主动取消不算错误
@@ -244,12 +292,12 @@ export function useAgentChat(): UseAgentChat {
           setPhase('idle');
         } else {
           // 流中断：后台仍在跑，走恢复路径
-          await recover(activeSessionId);
+          await recover(sessionId);
         }
       }
       return true;
     },
-    [activeSessionId, phase, handleEvent, recover, refreshSessions],
+    [phase, handleEvent, recover, refreshSessions],
   );
 
   return {
@@ -261,6 +309,7 @@ export function useAgentChat(): UseAgentChat {
     finalMessage,
     phase,
     error,
+    sessionContext,
     newSession,
     selectSession,
     send,

@@ -25,6 +25,8 @@ function eventTitle(event: TimelineEvent): string {
       return event.status === 'awaiting_user' ? '等待你的回答' : '完成';
     case 'error':
       return '出错了';
+    case 'assistant_message':
+      return 'AI 回复';
     default:
       return event.type;
   }
@@ -110,7 +112,7 @@ function UserTimelineItem({ text }: { text: string }) {
   );
 }
 
-/** 普通时间线条目（thinking / ask_user / done / error） */
+/** 普通时间线条目（thinking / ask_user / done / error / 历史回放） */
 function SimpleTimelineItem({ item }: { item: TimelineItem }) {
   const event = item.event;
   let body: React.ReactNode = null;
@@ -118,6 +120,13 @@ function SimpleTimelineItem({ item }: { item: TimelineItem }) {
     body = (
       <p className="text-sm text-text-primary mt-1 ml-4">
         {event.type === 'ask_user' ? event.question : event.pending_question}
+      </p>
+    );
+  } else if (event.type === 'assistant_message') {
+    // US-29：历史会话回放的 assistant 消息
+    body = (
+      <p className="text-sm text-text-primary mt-1 ml-4 whitespace-pre-wrap leading-relaxed">
+        {event.text}
       </p>
     );
   } else if (event.type === 'done' && event.final_message) {
@@ -149,7 +158,34 @@ function SimpleTimelineItem({ item }: { item: TimelineItem }) {
   );
 }
 
-export default function AgentWorkbench() {
+export interface AgentWorkbenchProps {
+  /** US-29：工作台上下文提供者（send 时携带，服务端幂等去重） */
+  agentContext?: () => Record<string, unknown>;
+  /** US-29：待自动发送的快捷指令（右栏入口触发，一次性消费） */
+  pendingAsk?: { context: Record<string, unknown>; prompt: string } | null;
+  /** US-29：快捷指令已被消费（清除 MainLayout 中的状态） */
+  onPendingAskConsumed?: () => void;
+}
+
+/** US-29：从会话 context 生成状态条摘要 */
+function contextSummary(ctx: Record<string, unknown> | null): string {
+  if (!ctx || Object.keys(ctx).length === 0) return '无';
+  const parts: string[] = [];
+  if (typeof ctx.current_node_id === 'string') parts.push(`节点 ${ctx.current_node_id}`);
+  const jd = ctx.structured_jd as Record<string, unknown> | undefined;
+  if (typeof jd?.job_title === 'string' && jd.job_title) parts.push(`JD ${jd.job_title}`);
+  const gap = ctx.gap_summary as Record<string, unknown> | undefined;
+  if (gap && typeof gap.overall_score === 'number') {
+    parts.push(`Gap ${Math.round(gap.overall_score * 100)}%`);
+  }
+  return parts.length > 0 ? parts.join(' · ') : '已附加';
+}
+
+export default function AgentWorkbench({
+  agentContext,
+  pendingAsk,
+  onPendingAskConsumed,
+}: AgentWorkbenchProps) {
   const {
     sessions,
     activeSessionId,
@@ -158,14 +194,17 @@ export default function AgentWorkbench() {
     pendingQuestion,
     phase,
     error,
+    sessionContext,
     newSession,
     selectSession,
     send,
-  } = useAgentChat();
+  } = useAgentChat({ getContext: agentContext });
 
   const [input, setInput] = useState('');
   const [answer, setAnswer] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
+  /** pendingAsk 消费中防重入（创建会话是异步的） */
+  const consumingAskRef = useRef(false);
 
   // 新事件到达时滚动到底部
   useEffect(() => {
@@ -175,10 +214,25 @@ export default function AgentWorkbench() {
     });
   }, [timeline.length, pendingQuestion]);
 
-  // 无会话时自动创建
+  // 无会话时自动创建（pendingAsk 流程会自己创建带上下文的会话，避免竞态）
   useEffect(() => {
-    if (!activeSessionId) void newSession();
-  }, [activeSessionId, newSession]);
+    if (!activeSessionId && !pendingAsk) void newSession();
+  }, [activeSessionId, pendingAsk, newSession]);
+
+  // US-29：消费快捷指令 → 创建带上下文的新会话 → 自动发送首条消息
+  useEffect(() => {
+    if (!pendingAsk || consumingAskRef.current) return;
+    consumingAskRef.current = true;
+    void (async () => {
+      try {
+        await newSession(pendingAsk.context);
+        await send(pendingAsk.prompt);
+      } finally {
+        consumingAskRef.current = false;
+        onPendingAskConsumed?.();
+      }
+    })();
+  }, [pendingAsk, newSession, send, onPendingAskConsumed]);
 
   const busy = phase === 'streaming' || phase === 'reconnecting';
 
@@ -215,7 +269,15 @@ export default function AgentWorkbench() {
                   minute: '2-digit',
                 })}
               </span>
-              <span className="text-text-muted">{s.status}</span>
+              <span className="flex items-center gap-1">
+                <span className="text-text-muted">{s.status}</span>
+                {/* US-29：带上下文的会话标记 */}
+                {Object.keys(s.context ?? {}).length > 0 && (
+                  <span className="ml-auto text-[10px] px-1.5 py-0.5 rounded bg-brand-primary-muted text-brand-primary shrink-0">
+                    上下文
+                  </span>
+                )}
+              </span>
             </button>
           ))}
         </div>
@@ -227,6 +289,13 @@ export default function AgentWorkbench() {
         <div className="h-9 flex items-center gap-3 px-4 border-b border-border-default text-xs text-text-tertiary bg-bg-secondary shrink-0">
           <span>会话：{activeSessionId ? activeSessionId.slice(0, 8) : '—'}</span>
           <span>状态：{sessionStatus ?? '—'}</span>
+          {/* US-29：当前会话绑定的上下文摘要 */}
+          <span
+            title={sessionContext ? JSON.stringify(sessionContext) : undefined}
+            className="truncate max-w-72"
+          >
+            上下文：{contextSummary(sessionContext)}
+          </span>
           {phase === 'streaming' && (
             <span className="text-brand-primary">● Agent 运行中</span>
           )}

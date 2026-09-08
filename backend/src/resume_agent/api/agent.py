@@ -56,6 +56,30 @@ class ChatRequest(BaseModel):
 
     session_id: str
     message: str = Field(min_length=1)
+    # US-29：工作台上下文（可选）。与会话已存 context 不同时更新并
+    # 在消息历史追加「上下文已更新」system 消息；null 值表示清除该 key。
+    context: dict[str, Any] | None = None
+
+
+def _apply_context_update(session: store.AgentSession, context: dict[str, Any]) -> None:
+    """应用上下文更新：null 字段清除，不同则追加 system 消息并持久化。
+
+    幂等：与已存 context 相同（合并清除后）则不做任何事。
+    """
+    merged = {**session.context}
+    for key, value in context.items():
+        if value is None:
+            merged.pop(key, None)
+        else:
+            merged[key] = value
+    if merged == session.context:
+        return
+    session.context = merged
+    session.messages.append({
+        "role": "system",
+        "content": f"上下文已更新：{json.dumps(merged, ensure_ascii=False)}",
+    })
+    store.save_session(session)
 
 
 def _get_runner() -> AgentRunner:
@@ -172,6 +196,10 @@ async def chat(req: ChatRequest) -> Any:
     runner = _get_runner()
     if not getattr(runner.llm, "configured", True):
         return error("LLM_NOT_CONFIGURED", "LLM 未配置，无法运行 Agent")
+
+    # US-29：工作台上下文更新（幂等；变化时追加 system 消息）
+    if req.context is not None:
+        _apply_context_update(session, req.context)
 
     queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
     # 是否已发出 error 事件（Runner 进入循环前失败时兜底发一条）

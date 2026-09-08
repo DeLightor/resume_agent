@@ -93,7 +93,9 @@ class AgentRunner:
         if session is None:
             return AgentRunResult(status="failed", error=f"会话不存在: {session_id}")
 
-        if session.status in ("done", "failed"):
+        # US-29：done/failed 会话带新用户消息时续聊（对话式工作台的自然
+        # 连续对话）；不带消息的空跑（如误触发）仍然拒绝。
+        if session.status in ("done", "failed") and not user_message:
             return AgentRunResult(
                 status="failed",
                 error=f"会话已结束（{session.status}），请创建新会话",
