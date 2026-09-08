@@ -9,6 +9,19 @@ import { useEffect, useRef, useState } from 'react';
 import { useAgentChat } from '@/hooks/useAgentChat';
 import type { TimelineItem } from '@/hooks/useAgentChat';
 import type { TimelineEvent } from '@/hooks/useAgentChat';
+import type { ReviewIssue } from '@/types/agent';
+
+/** US-30: 审查问题类型的中文标签 */
+const ISSUE_TYPE_LABELS: Record<string, string> = {
+  knowledge_boundary: '知识库边界',
+  cliche: '套话',
+  jd_coverage: 'JD 覆盖',
+  unverified_number: '数字无来源',
+};
+
+function issueTypeLabel(type: string): string {
+  return ISSUE_TYPE_LABELS[type] ?? type;
+}
 
 /** 事件类型的图标与标题 */
 function eventTitle(event: TimelineEvent): string {
@@ -21,6 +34,8 @@ function eventTitle(event: TimelineEvent): string {
       return `工具返回 ${event.name}`;
     case 'ask_user':
       return '需要你的输入';
+    case 'review':
+      return `内容审查（第 ${event.round} 轮）`;
     case 'done':
       return event.status === 'awaiting_user' ? '等待你的回答' : '完成';
     case 'error':
@@ -43,6 +58,8 @@ function eventDotCls(event: TimelineEvent): string {
       return 'bg-brand-primary';
     case 'ask_user':
       return 'bg-amber-500';
+    case 'review':
+      return event.passed ? 'bg-emerald-500' : 'bg-amber-500';
     case 'done':
       return 'bg-emerald-500';
     case 'error':
@@ -112,6 +129,42 @@ function UserTimelineItem({ text }: { text: string }) {
   );
 }
 
+/** US-30 reviewer-agent：审查时间线条目（徽标 + 问题列表 + summary） */
+function ReviewTimelineItem({ item }: { item: TimelineItem }) {
+  const event = item.event;
+  if (event.type !== 'review') return null;
+  return (
+    <div className="timeline-item">
+      <div className="flex items-center gap-2">
+        <span className={`w-2 h-2 rounded-full shrink-0 ${eventDotCls(event)}`} />
+        <span className="text-sm font-medium">{eventTitle(event)}</span>
+        <span
+          className={`text-xs px-1.5 py-0.5 rounded shrink-0 ${
+            event.passed
+              ? 'bg-emerald-100 text-emerald-700'
+              : 'bg-amber-100 text-amber-700'
+          }`}
+        >
+          {event.passed ? '通过' : '打回重写'}
+        </span>
+      </div>
+      {event.issues.length > 0 && (
+        <ul className="mt-1 ml-4 flex flex-col gap-0.5">
+          {event.issues.map((issue: ReviewIssue, i: number) => (
+            <li key={i} className="text-xs text-text-secondary">
+              <span className="text-amber-700">[{issueTypeLabel(issue.type)}]</span>{' '}
+              {issue.message}
+            </li>
+          ))}
+        </ul>
+      )}
+      {event.summary && (
+        <p className="text-xs text-text-muted mt-1 ml-4">{event.summary}</p>
+      )}
+    </div>
+  );
+}
+
 /** agent-write-guard：write_confirm 时间线条目（待写入内容可展开预览） */
 function WriteConfirmTimelineItem({ item }: { item: TimelineItem }) {
   const [open, setOpen] = useState(false);
@@ -126,6 +179,18 @@ function WriteConfirmTimelineItem({ item }: { item: TimelineItem }) {
       >
         <span className="w-2 h-2 rounded-full shrink-0 bg-amber-500" />
         <span className="text-sm font-medium">请求写入节点「{event.node_id}」</span>
+        {/* US-30: 审查徽标 */}
+        {event.review && (
+          <span
+            className={`text-xs px-1.5 py-0.5 rounded shrink-0 ${
+              event.review.passed
+                ? 'bg-emerald-100 text-emerald-700'
+                : 'bg-amber-100 text-amber-700'
+            }`}
+          >
+            {event.review.passed ? '审查通过' : '审查未通过'}
+          </span>
+        )}
         <span className="text-xs text-text-muted ml-auto">{open ? '收起 ▲' : '展开 ▼'}</span>
       </button>
       {open && (
@@ -348,6 +413,8 @@ export default function AgentWorkbench({
                 <ToolTimelineItem key={item.id} item={item} hasResult />
               ) : item.event.type === 'write_confirm' ? (
                 <WriteConfirmTimelineItem key={item.id} item={item} />
+              ) : item.event.type === 'review' ? (
+                <ReviewTimelineItem key={item.id} item={item} />
               ) : (
                 <SimpleTimelineItem key={item.id} item={item} />
               );
@@ -397,6 +464,33 @@ export default function AgentWorkbench({
               <p className="text-sm font-medium text-text-primary">
                 Agent 请求写入节点「{pendingWrite.node_id}」的简历内容（整段覆盖），请确认。
               </p>
+              {/* US-30: Reviewer 审查意见（未通过时黄色警示，如实展示） */}
+              {pendingWrite.review && (
+                <div
+                  className={`mt-2 p-2 rounded-md text-xs ${
+                    pendingWrite.review.passed
+                      ? 'bg-emerald-50 text-emerald-800'
+                      : 'bg-amber-50 border border-amber-300 text-amber-800'
+                  }`}
+                >
+                  <p className="font-medium">
+                    审查意见：
+                    {pendingWrite.review.passed ? '通过' : '未通过（重写后仍有问题，请留意）'}
+                    {pendingWrite.review.summary
+                      ? ` —— ${pendingWrite.review.summary}`
+                      : ''}
+                  </p>
+                  {pendingWrite.review.issues.length > 0 && (
+                    <ul className="mt-1 list-disc pl-4">
+                      {pendingWrite.review.issues.map((issue, i) => (
+                        <li key={i}>
+                          [{issueTypeLabel(issue.type)}] {issue.message}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
               <details className="mt-2">
                 <summary className="text-xs text-text-secondary cursor-pointer">
                   查看待写入内容

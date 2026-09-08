@@ -15,6 +15,7 @@ import {
 import type {
   AgentEvent,
   AgentSessionSummary,
+  ReviewResult,
 } from '@/types/agent';
 
 /** 用户消息事件（本地回显，不来自 SSE 协议） */
@@ -33,6 +34,8 @@ export interface AssistantMessageEvent {
 export interface PendingWriteView {
   node_id: string;
   content: unknown;
+  /** US-30: Reviewer 审查结果（确认卡片展示审查意见） */
+  review?: ReviewResult;
 }
 
 /** 时间线渲染事件：SSE 事件 + 本地回放消息 */
@@ -142,7 +145,11 @@ export function useAgentChat(args?: UseAgentChatArgs): UseAgentChat {
         setPendingWrite(null);
         break;
       case 'write_confirm':
-        setPendingWrite({ node_id: event.node_id, content: event.content });
+        setPendingWrite({
+          node_id: event.node_id,
+          content: event.content,
+          review: event.review,
+        });
         break;
       case 'done':
         setSessionStatus(event.status);
@@ -183,6 +190,7 @@ export function useAgentChat(args?: UseAgentChatArgs): UseAgentChat {
                 ? {
                     node_id: detail.pending_write.node_id,
                     content: detail.pending_write.content,
+                    review: detail.pending_write.review,
                   }
                 : null,
             );
@@ -242,7 +250,11 @@ export function useAgentChat(args?: UseAgentChatArgs): UseAgentChat {
       setPendingQuestion(detail.pending_question);
       setPendingWrite(
         detail.pending_write
-          ? { node_id: detail.pending_write.node_id, content: detail.pending_write.content }
+          ? {
+              node_id: detail.pending_write.node_id,
+              content: detail.pending_write.content,
+              review: detail.pending_write.review,
+            }
           : null,
       );
       const last = detail.messages[detail.messages.length - 1];

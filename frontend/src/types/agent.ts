@@ -25,11 +25,26 @@ export interface AgentMessage {
   }[];
 }
 
+/** US-30 reviewer-agent: 审查问题项 */
+export interface ReviewIssue {
+  type: string;
+  message: string;
+}
+
+/** US-30 reviewer-agent: Reviewer 审查结果 */
+export interface ReviewResult {
+  passed: boolean;
+  issues: ReviewIssue[];
+  summary: string;
+}
+
 /** agent-write-guard: awaiting_user 时待确认的写入 */
 export interface PendingWrite {
   tool_call_id: string;
   node_id: string;
   content: unknown;
+  /** US-30: 写入门禁暂停时附带的 Reviewer 审查结果 */
+  review?: ReviewResult;
 }
 
 /** 会话详情（GET /api/agent/sessions/{id}） */
@@ -63,6 +78,8 @@ export type AgentEvent =
       node_id: string;
       content: unknown;
       question: string;
+      /** US-30: 附带的 Reviewer 审查结果 */
+      review: ReviewResult;
     }
   | {
       type: 'done';
@@ -72,7 +89,14 @@ export type AgentEvent =
       rounds_used?: number;
     }
   | { type: 'error'; message: string; rounds_used?: number }
-  /** 预留 US-30 Reviewer 双审 */
-  | { type: 'review'; [key: string]: unknown }
-  /** 预留 US-30 草稿事件 */
+  /** US-30 reviewer-agent: Reviewer 独立审查结果（同一草稿每次审查一条） */
+  | {
+      type: 'review';
+      node_id: string;
+      round: number;
+      passed: boolean;
+      issues: ReviewIssue[];
+      summary: string;
+    }
+  /** 预留草稿事件 */
   | { type: 'draft'; [key: string]: unknown };

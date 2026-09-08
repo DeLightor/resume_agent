@@ -567,6 +567,32 @@ def _write_call(call_id: str, node_id: str = "master") -> Any:
     }])
 
 
+def _pass_review() -> dict[str, Any]:
+    """审查通过的固定结果。"""
+    return {"passed": True, "issues": [], "summary": "审查通过"}
+
+
+class _ScriptedReviewer:
+    """按脚本返回审查结果的假 Reviewer。"""
+
+    def __init__(self, results: list[dict[str, Any]]) -> None:
+        self.results = list(results)
+        self.calls: list[dict[str, Any]] = []
+
+    async def review_draft(
+        self,
+        content: Any,
+        structured_jd: Any,
+        evidence: Any,
+    ) -> dict[str, Any]:
+        self.calls.append({
+            "content": content,
+            "structured_jd": structured_jd,
+            "evidence": evidence,
+        })
+        return self.results.pop(0)
+
+
 def test_run_write_node_gates_for_confirmation(initialized_db: Any) -> None:
     """write_node 合法调用不直接写入：暂停等待用户确认。"""
     recorder: list[dict[str, Any]] = []
@@ -578,6 +604,7 @@ def test_run_write_node_gates_for_confirmation(initialized_db: Any) -> None:
     runner = AgentRunner(
         llm=llm, registry=_registry_with_write_node(recorder),
         db_path=initialized_db,
+        reviewer=_ScriptedReviewer([_pass_review()]),
     )
     events, on_event = _collect_events()
 
@@ -587,12 +614,14 @@ def test_run_write_node_gates_for_confirmation(initialized_db: Any) -> None:
     assert result.pending_question is not None
     # 写入未执行
     assert recorder == []
-    # 事件序列：thinking → write_confirm → done(awaiting_user)
+    # 事件序列：thinking → review → write_confirm → done(awaiting_user)
     types = [e["type"] for e in events]
-    assert types == ["thinking", "write_confirm", "done"]
-    assert events[1]["node_id"] == "master"
-    assert events[1]["content"] == _WRITE_CONTENT
-    assert events[1]["question"] is not None
+    assert types == ["thinking", "review", "write_confirm", "done"]
+    assert events[1]["passed"] is True
+    assert events[2]["node_id"] == "master"
+    assert events[2]["content"] == _WRITE_CONTENT
+    assert events[2]["question"] is not None
+    assert events[2]["review"]["passed"] is True
     assert events[-1]["status"] == "awaiting_user"
 
     fetched = store.get_session(session.id, initialized_db)
@@ -602,6 +631,7 @@ def test_run_write_node_gates_for_confirmation(initialized_db: Any) -> None:
         "tool_call_id": "tcw1",
         "node_id": "master",
         "content": _WRITE_CONTENT,
+        "review": _pass_review(),
     }
     # 尾部是未闭合的 assistant tool_calls
     assert fetched.messages[-1]["role"] == "assistant"
@@ -619,6 +649,7 @@ def test_resume_confirmation_executes_write(initialized_db: Any) -> None:
     runner = AgentRunner(
         llm=llm, registry=_registry_with_write_node(recorder),
         db_path=initialized_db,
+        reviewer=_ScriptedReviewer([_pass_review()]),
     )
     _run(runner.run(session.id))
 
@@ -660,6 +691,7 @@ def test_resume_non_confirmation_skips_write(initialized_db: Any) -> None:
     runner = AgentRunner(
         llm=llm, registry=_registry_with_write_node(recorder),
         db_path=initialized_db,
+        reviewer=_ScriptedReviewer([_pass_review()]),
     )
     _run(runner.run(session.id))
 
@@ -694,6 +726,7 @@ def test_write_node_re_gates_after_confirmation(initialized_db: Any) -> None:
     runner = AgentRunner(
         llm=llm, registry=_registry_with_write_node(recorder),
         db_path=initialized_db,
+        reviewer=_ScriptedReviewer([_pass_review(), _pass_review()]),
     )
 
     result1 = _run(runner.run(session.id))
@@ -739,6 +772,150 @@ def test_write_node_invalid_args_skips_gate(initialized_db: Any) -> None:
     assert len(tool_msgs) == 1
     payload = json.loads(tool_msgs[0]["content"])
     assert "error" in payload
+
+
+def test_write_review_rejects_then_passes_gate(initialized_db: Any) -> None:
+    """US-30 双审：不合格打回（意见闭合 tool_call）→ 重写通过 → 进门禁。"""
+    recorder: list[dict[str, Any]] = []
+    session = store.create_session(
+        db_path=initialized_db,
+        context={"structured_jd": {"job_title": "后端工程师"}},
+    )
+    llm = _ScriptedLLM([
+        _write_call("tcw1"),
+        _write_call("tcw2"),
+        _msg("改好了。"),
+    ])
+    fail_review = {
+        "passed": False,
+        "issues": [{"type": "cliche", "message": "「精通」无佐证"}],
+        "summary": "发现 1 处套话",
+    }
+    reviewer = _ScriptedReviewer([fail_review, _pass_review()])
+    runner = AgentRunner(
+        llm=llm, registry=_registry_with_write_node(recorder),
+        db_path=initialized_db,
+        reviewer=reviewer,
+    )
+    events, on_event = _collect_events()
+
+    result = _run(runner.run(session.id, on_event=on_event))
+
+    assert result.status == "awaiting_user"
+    assert recorder == []  # 始终未直接写入
+
+    # 审查器收到了草稿与会话 JD（独立上下文由 ReviewerAgent 保证）
+    assert reviewer.calls[0]["content"] == _WRITE_CONTENT
+    assert reviewer.calls[0]["structured_jd"] == {"job_title": "后端工程师"}
+
+    # 事件：thinking → review(打回) → thinking → review(通过) → write_confirm → done
+    types = [e["type"] for e in events]
+    assert types == [
+        "thinking", "review", "thinking", "review", "write_confirm", "done",
+    ]
+    assert events[1]["passed"] is False
+    assert events[1]["round"] == 1
+    assert events[3]["passed"] is True
+    assert events[3]["round"] == 2
+    assert events[4]["review"]["passed"] is True
+
+    # 第一次 write_node 以「打回」tool result 闭合，意见回传 LLM
+    fetched = store.get_session(session.id, initialized_db)
+    assert fetched is not None
+    tool_msgs = [m for m in fetched.messages if m["role"] == "tool"]
+    assert len(tool_msgs) == 1
+    assert tool_msgs[0]["tool_call_id"] == "tcw1"
+    payload = json.loads(tool_msgs[0]["content"])
+    assert payload["rejected_by_review"] is True
+    assert payload["review"]["issues"][0]["type"] == "cliche"
+
+    # 最终门禁挂在第二次调用上，携带通过的审查结果
+    assert fetched.pending_write == {
+        "tool_call_id": "tcw2",
+        "node_id": "master",
+        "content": _WRITE_CONTENT,
+        "review": _pass_review(),
+    }
+
+    # 打回也记 trace
+    traces = store.list_traces(session.id, initialized_db)
+    rejected = [t for t in traces if t["tool_name"] == "write_node"]
+    assert len(rejected) == 1
+    assert json.loads(rejected[0]["output"])["rejected_by_review"] is True
+
+
+def test_write_review_exhausted_allows_gate_with_issues(initialized_db: Any) -> None:
+    """US-30 双审：打回 2 次后第 3 次仍不合格 → 放行进 gate，问题如实展示。"""
+    recorder: list[dict[str, Any]] = []
+    session = store.create_session(db_path=initialized_db)
+    llm = _ScriptedLLM([
+        _write_call("tcw1"),
+        _write_call("tcw2"),
+        _write_call("tcw3"),
+        _msg("改不动了。"),
+    ])
+    fail_review = {
+        "passed": False,
+        "issues": [{"type": "knowledge_boundary", "message": "素材外内容"}],
+        "summary": "仍有问题",
+    }
+    reviewer = _ScriptedReviewer([fail_review, fail_review, fail_review])
+    runner = AgentRunner(
+        llm=llm, registry=_registry_with_write_node(recorder),
+        db_path=initialized_db,
+        reviewer=reviewer,
+    )
+    events, on_event = _collect_events()
+
+    result = _run(runner.run(session.id, on_event=on_event))
+
+    # 三次审查、两次打回、第三次放行进 gate
+    review_events = [e for e in events if e["type"] == "review"]
+    assert len(review_events) == 3
+    assert [e["round"] for e in review_events] == [1, 2, 3]
+    confirm = next(e for e in events if e["type"] == "write_confirm")
+    assert confirm["review"]["passed"] is False
+    assert confirm["review"]["issues"][0]["type"] == "knowledge_boundary"
+
+    assert result.status == "awaiting_user"
+    fetched = store.get_session(session.id, initialized_db)
+    assert fetched is not None
+    assert fetched.pending_write is not None
+    assert fetched.pending_write["tool_call_id"] == "tcw3"
+    assert fetched.pending_write["review"]["passed"] is False
+    # 前两次调用被闭合打回
+    tool_msgs = [m for m in fetched.messages if m["role"] == "tool"]
+    assert [m["tool_call_id"] for m in tool_msgs] == ["tcw1", "tcw2"]
+
+
+def test_write_review_error_fails_open_to_gate(initialized_db: Any) -> None:
+    """US-30 fail-open：reviewer 异常 → 跳过审查直接进门禁。"""
+    recorder: list[dict[str, Any]] = []
+    session = store.create_session(db_path=initialized_db)
+    llm = _ScriptedLLM([
+        _write_call("tcw1"),
+        _msg("已写入。"),
+    ])
+
+    class _BoomReviewer:
+        async def review_draft(self, *args: Any) -> dict[str, Any]:
+            raise RuntimeError("reviewer 挂了")
+
+    runner = AgentRunner(
+        llm=llm, registry=_registry_with_write_node(recorder),
+        db_path=initialized_db,
+        reviewer=_BoomReviewer(),
+    )
+    events, on_event = _collect_events()
+
+    result = _run(runner.run(session.id, on_event=on_event))
+
+    assert result.status == "awaiting_user"
+    types = [e["type"] for e in events]
+    assert "review" in types
+    confirm = next(e for e in events if e["type"] == "write_confirm")
+    assert confirm["review"]["passed"] is True
+    assert "跳过" in confirm["review"]["summary"]
 
 
 def test_is_write_confirmation_lexicon() -> None:

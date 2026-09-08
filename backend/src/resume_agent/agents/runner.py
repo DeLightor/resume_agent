@@ -22,6 +22,7 @@ from typing import Any
 
 from resume_agent.agents import store
 from resume_agent.agents.registry import ToolRegistry
+from resume_agent.agents.reviewer import ReviewerAgent
 from resume_agent.config import settings
 from resume_agent.tools.agent_tools import (
     ASK_USER_TOOL_NAME,
@@ -39,7 +40,10 @@ AGENT_SYSTEM_PROMPT = """你是 Resume-Agent 的简历助理 Agent，帮助用�
 1. 诚实优先：简历内容必须基于知识库中的真实素材，先调用 retrieve_knowledge 检索证据，禁止编造经历或量化数据。
 2. 需要澄清时直接调用 ask_user 向用户提问，不要自行猜测。
 3. 修改用户简历节点前，先 read_node 了解现状。
-4. 修改简历内容通过 write_node 发起：系统会暂停向用户展示待写入内容，用户明确同意后才真正写入；被拒绝时根据用户反馈调整后重新发起。
+4. 修改简历内容通过 write_node 发起：系统会先由独立 Reviewer 审查草稿
+   （不合格会带意见打回，请按意见修改后重新发起，不要原样重发），
+   通过后暂停向用户展示待写入内容，用户明确同意后才真正写入；
+   被用户拒绝时根据用户反馈调整后重新发起。
 5. 每次回复使用简洁的中文，先给结论再说理由。"""
 
 # ---------------------------------------------------------------------------
@@ -58,6 +62,10 @@ _WRITE_CONFIRM_LEXICON = frozenset({
 # 规范化时去除的首尾标点与结尾语气词
 _WRITE_STRIP_CHARS = "。！？!?,，.、~～ \t\n"
 _WRITE_TONE_SUFFIXES = ("吧", "呢", "啊", "呀", "哈")
+
+# US-30 reviewer-agent：同一轮 run 内 write_node 被审查打回的最大次数
+# （最多 2 次重写，第 3 次审查仍不合格则如实放行进门禁）
+_WRITE_REVIEW_MAX_REJECTS = 2
 
 
 def is_write_confirmation(reply: str) -> bool:
@@ -91,6 +99,7 @@ class AgentRunner:
         llm: Any | None = None,
         registry: ToolRegistry | None = None,
         db_path: Path | str | None = None,
+        reviewer: Any | None = None,
     ) -> None:
         if llm is None:
             from resume_agent.llm.client import LLMClient
@@ -99,6 +108,8 @@ class AgentRunner:
         self.llm = llm
         self.registry = registry if registry is not None else build_registry()
         self.db_path = db_path
+        # US-30 reviewer-agent：独立上下文的审查者（测试可注入脚本 mock）
+        self.reviewer = reviewer if reviewer is not None else ReviewerAgent()
 
     # ------------------------------------------------------------------
     # 主入口
@@ -268,6 +279,8 @@ class AgentRunner:
         max_rounds = settings.agent_max_rounds
         tools_schema = self.registry.schemas()
         rounds_used = 0
+        # US-30：本轮 run 内 write_node 被审查打回的次数（不跨 run 持久化）
+        write_review_rounds = 0
 
         try:
             for _ in range(max_rounds):
@@ -320,9 +333,43 @@ class AgentRunner:
 
                     # agent-write-guard：合法 write_node 不直接写入，
                     # 暂停等待用户确认（非法参数走下方正常执行路径回错误）。
+                    # US-30 reviewer-agent：进门禁前先过独立 Reviewer 双审。
                     if tc_name == WRITE_NODE_TOOL_NAME and self._is_gated_write(tc_args):
                         node_id = str(tc_args.get("node_id", "")).strip()
                         content = tc_args.get("content")
+                        review = await self._run_write_review(
+                            session, node_id, content, on_event, write_review_rounds
+                        )
+
+                        # 不合格且未达打回上限：带意见打回，LLM 依据
+                        # review 重写后重新发起（同一循环内继续，不暂停会话）
+                        if (
+                            not review.get("passed", True)
+                            and write_review_rounds < _WRITE_REVIEW_MAX_REJECTS
+                        ):
+                            write_review_rounds += 1
+                            tool_result = {
+                                "ok": False,
+                                "written": False,
+                                "rejected_by_review": True,
+                                "review": review,
+                            }
+                            session.messages.append({
+                                "role": "tool",
+                                "tool_call_id": tc.id,
+                                "content": self._result_to_content(tool_result),
+                            })
+                            store.append_trace(
+                                session_id=session.id,
+                                round=rounds_used,
+                                tool_name=WRITE_NODE_TOOL_NAME,
+                                input_data={"node_id": node_id, "content": content},
+                                output_data=tool_result,
+                                db_path=self.db_path,
+                            )
+                            continue
+
+                        # 通过或打回耗尽（如实携带问题）→ 进入写入门禁
                         question = (
                             f"Agent 请求写入节点「{node_id}」的简历内容（整段覆盖）。"
                             "回复「确认」执行写入，或说明你的修改意见。"
@@ -333,6 +380,7 @@ class AgentRunner:
                             "tool_call_id": tc.id,
                             "node_id": node_id,
                             "content": content,
+                            "review": review,
                         }
                         store.save_session(session, self.db_path)
                         await self._emit(on_event, {
@@ -340,6 +388,7 @@ class AgentRunner:
                             "node_id": node_id,
                             "content": content,
                             "question": question,
+                            "review": review,
                         })
                         await self._emit(on_event, {
                             "type": "done", "status": "awaiting_user",
@@ -418,6 +467,74 @@ class AgentRunner:
     # ------------------------------------------------------------------
     # 序列化辅助
     # ------------------------------------------------------------------
+
+    async def _run_write_review(
+        self,
+        session: store.AgentSession,
+        node_id: str,
+        content: Any,
+        on_event: EventCallback | None,
+        write_review_rounds: int,
+    ) -> dict[str, Any]:
+        """US-30：门禁前的独立双审（fail-open，异常放行）。"""
+        evidence = self._collect_review_evidence(content)
+        structured_jd = (
+            session.context.get("structured_jd")
+            if isinstance(session.context, dict)
+            else None
+        )
+        try:
+            review = await self.reviewer.review_draft(
+                content, structured_jd, evidence
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Reviewer 审查异常，fail-open 放行: %s", exc)
+            review = {"passed": True, "issues": [], "summary": f"审查跳过: {exc}"}
+        if not isinstance(review, dict):
+            review = {"passed": True, "issues": [], "summary": "审查结果非法，已放行"}
+
+        await self._emit(on_event, {
+            "type": "review",
+            "node_id": node_id,
+            "round": write_review_rounds + 1,
+            "passed": bool(review.get("passed")),
+            "issues": review.get("issues", []),
+            "summary": review.get("summary", ""),
+        })
+        return review
+
+    @staticmethod
+    def _collect_review_evidence(content: Any) -> list[dict[str, Any]]:
+        """为审查检索知识库证据（从草稿提取关键词）。"""
+        query = AgentRunner._review_query(content)
+        if not query:
+            return []
+        try:
+            from resume_agent.services.knowledge_search import search_knowledge
+
+            return search_knowledge([query], top_k=5)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("审查证据检索失败: %s", exc)
+            return []
+
+    @staticmethod
+    def _review_query(content: Any) -> str:
+        """从草稿内容提取文本关键词（叶子字符串拼接，截断防超长）。"""
+        parts: list[str] = []
+
+        def walk(node: Any) -> None:
+            if isinstance(node, str):
+                if node.strip():
+                    parts.append(node.strip()[:50])
+            elif isinstance(node, dict):
+                for value in node.values():
+                    walk(value)
+            elif isinstance(node, list):
+                for item in node:
+                    walk(item)
+
+        walk(content)
+        return " ".join(parts)[:200]
 
     @staticmethod
     async def _emit(on_event: EventCallback | None, event: dict[str, Any]) -> None:

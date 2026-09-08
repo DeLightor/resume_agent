@@ -4,7 +4,8 @@
 
 1. 检索：对 JD 中每项技能（tech_stack + hard_skills），在知识库中检索 top-3
    经历切片，合并去重。
-2. 反思：LLM 审核检索到的内容，检测套话、前后矛盾、夸大表述。
+2. 反思：LLM 审核检索到的内容，检测套话、前后矛盾、夸大表述
+   （US-30 迁移至 ReviewerAgent.review_evidence，本模块不再持有实现）。
 3. 撰写：LLM 基于检索内容 + 反思结果，生成目标段落。
 
 不引入 LangGraph，用简单函数链实现等价工作流。
@@ -34,24 +35,6 @@ router = APIRouter(prefix="/generate", tags=["generate"])
 _SECTIONS: tuple[str, ...] = ("experience", "projects", "skills")
 
 # === System Prompts ===
-
-_REFLECTION_PROMPT = """你是简历内容审核专家。我会给你一些从知识库中检索到的真实经历片段。
-请审核这些内容，检测以下问题：
-
-1. 套话：空洞、缺乏具体数据的表述（如"负责优化系统性能"无量化结果）
-2. 前后矛盾：同一经历在不同片段中描述不一致
-3. 夸大表述：超出知识库记录范围的夸大（如知识库说"参与"，描述为"主导"）
-
-输出 JSON：
-{
-  "issues_found": int,        // 发现的问题数量
-  "issues": [                // 问题列表
-    {"type": "套话/矛盾/夸大", "description": "...", "source": "..."}
-  ],
-  "notes": "string"          // 总体评价
-}
-
-如果没有问题，issues_found 为 0，issues 为空数组，notes 说明内容质量良好。"""
 
 _WRITER_PROMPT_EXPERIENCE = """你是资深简历撰写专家。基于以下知识库检索到的真实经历片段和审核反馈，生成定制化的工作经历段落。
 
@@ -206,35 +189,10 @@ def _parse_json_safely(text: str) -> dict[str, Any]:
 async def _run_reflection(
     evidence: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """第 2 步：反思审核。"""
-    from resume_agent.llm.client import LLMClient
+    """第 2 步：反思审核（US-30 迁移至 ReviewerAgent.review_evidence）。"""
+    from resume_agent.agents.reviewer import ReviewerAgent
 
-    llm = LLMClient()
-    if not llm.configured:
-        return {"issues_found": 0, "issues": [], "notes": "LLM 未配置，跳过审核"}
-
-    evidence_text = _format_evidence_for_prompt(evidence)
-    user_content = f"请审核以下知识库检索到的经历片段：\n\n{evidence_text}"
-
-    try:
-        response = await llm.chat(
-            system_prompt=_REFLECTION_PROMPT,
-            user_content=user_content,
-            response_format_json=True,
-        )
-        result = _parse_json_safely(response)
-        return {
-            "issues_found": result.get("issues_found", 0),
-            "issues": result.get("issues", []),
-            "notes": result.get("notes", ""),
-        }
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("反思审核失败: %s", exc)
-        return {
-            "issues_found": 0,
-            "issues": [],
-            "notes": f"审核跳过: {exc}",
-        }
+    return await ReviewerAgent().review_evidence(evidence)
 
 
 async def _run_writer(

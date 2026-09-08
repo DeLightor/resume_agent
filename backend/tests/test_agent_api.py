@@ -407,6 +407,11 @@ def test_get_session_detail_returns_pending_write(monkeypatch: Any) -> None:
         "tool_call_id": "tc1",
         "node_id": "master",
         "content": {"skills": []},
+        "review": {
+            "passed": True,
+            "issues": [],
+            "summary": "审查通过",
+        },
     }
     store.save_session(session)
 
@@ -414,10 +419,12 @@ def test_get_session_detail_returns_pending_write(monkeypatch: Any) -> None:
     assert resp.status_code == 200
     body = resp.json()
     assert body["ok"] is True
+    # US-30：pending_write 携带 Reviewer 审查结果（前端恢复卡片展示）
     assert body["data"]["pending_write"] == {
         "tool_call_id": "tc1",
         "node_id": "master",
         "content": {"skills": []},
+        "review": {"passed": True, "issues": [], "summary": "审查通过"},
     }
 
 
@@ -445,6 +452,39 @@ def test_chat_streams_write_confirm_event(monkeypatch: Any) -> None:
     assert events[0][1]["node_id"] == "master"
     assert events[0][1]["content"] == {"skills": []}
     assert events[-1][1]["status"] == "awaiting_user"
+
+
+def test_chat_streams_review_event(monkeypatch: Any) -> None:
+    """US-30：review 事件经 SSE 帧透传（打回与放行路径都发出）。"""
+    _init_db()
+    from resume_agent.main import app
+
+    _mock_stream_runner(monkeypatch, [[
+        {"type": "review", "node_id": "master", "round": 1, "passed": False,
+         "issues": [{"type": "cliche", "message": "「精通」无佐证"}],
+         "summary": "发现 1 处套话"},
+        {"type": "review", "node_id": "master", "round": 2, "passed": True,
+         "issues": [], "summary": "审查通过"},
+        {"type": "write_confirm", "node_id": "master", "content": {"skills": []},
+         "question": "确认写入？",
+         "review": {"passed": True, "issues": [], "summary": "审查通过"}},
+        {"type": "done", "status": "awaiting_user",
+         "pending_question": "确认写入？", "rounds_used": 2},
+    ]])
+    client = TestClient(app)
+    created = client.post("/api/agent/sessions", json={}).json()["data"]
+
+    resp = client.post("/api/agent/chat", json={
+        "session_id": created["id"], "message": "帮我优化",
+    })
+    assert resp.status_code == 200
+    events = _parse_sse(resp.text)
+    types = [t for t, _ in events]
+    assert types == ["review", "review", "write_confirm", "done"]
+    assert events[0][1]["passed"] is False
+    assert events[0][1]["issues"][0]["type"] == "cliche"
+    assert events[1][1]["round"] == 2
+    assert events[2][1]["review"]["summary"] == "审查通过"
 
 
 def test_chat_llm_not_configured(monkeypatch: Any) -> None:
@@ -660,6 +700,70 @@ def test_chat_without_context_unchanged(monkeypatch: Any) -> None:
     session = store.get_session(created["id"])
     assert session is not None
     assert session.context == {"current_node_id": "branch-安全"}
+
+
+def test_chat_context_update_awaits_user_inserts_before_tool_call(monkeypatch: Any) -> None:
+    """awaiting_user 会话更新 context → 更新消息插在未闭合 tool_calls 之前。
+
+    否则 system 消息会插进 assistant(tool_calls) 与 resume 追加的 tool
+    result 之间，违反 OpenAI 协议（DeepSeek 400，US-30 冒烟发现）。
+    """
+    _init_db()
+    from resume_agent.agents.runner import AgentRunResult
+    from resume_agent.main import app
+
+    received: dict[str, Any] = {}
+
+    class _FakeRunner:
+        llm = None
+
+        async def run(self, session_id: str, user_message: str | None = None,
+                      on_event: Any = None):
+            return AgentRunResult(status="done", final_message="ok")
+
+        async def resume(self, session_id: str, answer: str, on_event: Any = None):
+            session = store.get_session(session_id)
+            received["messages"] = list(session.messages) if session else []
+            return AgentRunResult(status="done", final_message="ok")
+
+    monkeypatch.setattr("resume_agent.api.agent.AgentRunner", _FakeRunner)
+    client = TestClient(app)
+    created = client.post(
+        "/api/agent/sessions",
+        json={"context": {"current_node_id": "branch-安全"}},
+    ).json()["data"]
+
+    # 构造 ask_user 暂停状态（未闭合 tool_call）
+    session = store.get_session(created["id"])
+    assert session is not None
+    session.messages.extend([
+        {"role": "user", "content": "帮我优化"},
+        {"role": "assistant", "content": None, "tool_calls": [{
+            "id": "tc-ask", "type": "function",
+            "function": {"name": "ask_user", "arguments": '{"question": "想优化哪部分？"}'},
+        }]},
+    ])
+    session.status = "awaiting_user"
+    session.pending_question = "想优化哪部分？"
+    store.save_session(session)
+
+    client.post("/api/agent/chat", json={
+        "session_id": created["id"], "message": "选方案 1",
+        "context": {"current_node_id": "branch-后端"},
+    })
+
+    messages = received["messages"]
+    ctx_idx = next(
+        i for i, m in enumerate(messages)
+        if m.get("role") == "system" and "上下文已更新" in (m.get("content") or "")
+    )
+    assistant_idx = next(
+        i for i, m in enumerate(messages)
+        if m.get("role") == "assistant" and m.get("tool_calls")
+    )
+    # 更新消息在带未闭合 tool_calls 的 assistant 之前 →
+    # resume 追加的 tool result 紧跟 assistant（协议合法）
+    assert ctx_idx < assistant_idx
 
 
 def test_chat_emits_error_event_on_runner_exception(monkeypatch: Any) -> None:

@@ -491,11 +491,14 @@ def test_llm_writer_exception_returns_error(
 def test_llm_not_configured_reflection_template(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """LLM 未配置时 _run_reflection 返回模板兜底结果。"""
+    """LLM 未配置时 ReviewerAgent.review_evidence 返回模板兜底结果。
+
+    （US-30 反思逻辑迁移：原 generate._run_reflection 已删除。）
+    """
     _init_db()
     _install_mock_llm_not_configured(monkeypatch)
 
-    from resume_agent.api.generate import _run_reflection
+    from resume_agent.agents.reviewer import ReviewerAgent
 
     evidence = [
         {
@@ -505,8 +508,8 @@ def test_llm_not_configured_reflection_template(
         }
     ]
 
-    # LLM 未配置时，_run_reflection 应返回模板兜底
-    result = asyncio.run(_run_reflection(evidence))
+    # LLM 未配置时，审查应返回模板兜底
+    result = asyncio.run(ReviewerAgent().review_evidence(evidence))
 
     assert result["issues_found"] == 0
     assert result["issues"] == []

@@ -61,10 +61,40 @@ class ChatRequest(BaseModel):
     context: dict[str, Any] | None = None
 
 
+def _pending_tool_call_index(messages: list[dict[str, Any]]) -> int | None:
+    """定位带未闭合 tool_calls 的 assistant 消息下标（无则 None）。
+
+    OpenAI 协议要求 tool result 紧跟 assistant(tool_calls)；插入任何消息
+    到两者之间会导致 LLM 400（US-30 冒烟发现）。
+    """
+    closed_ids = {
+        m["tool_call_id"]
+        for m in messages
+        if m.get("role") == "tool" and m.get("tool_call_id")
+    }
+    for i in range(len(messages) - 1, -1, -1):
+        msg = messages[i]
+        if msg.get("role") != "assistant":
+            continue
+        tool_calls = msg.get("tool_calls") or []
+        if any(
+            tc.get("id") not in closed_ids
+            for tc in tool_calls
+            if isinstance(tc, dict)
+        ):
+            return i
+        return None  # 最后一条 assistant 已全部闭合 → 无插入约束
+    return None
+
+
 def _apply_context_update(session: store.AgentSession, context: dict[str, Any]) -> None:
     """应用上下文更新：null 字段清除，不同则追加 system 消息并持久化。
 
     幂等：与已存 context 相同（合并清除后）则不做任何事。
+
+    awaiting_user 会话（ask_user / 写入门禁暂停）存在未闭合的 tool_calls，
+    更新消息必须插在它**之前**——resume 会在其后追加 tool result，协议要求
+    二者相邻（US-30 冒烟发现 DeepSeek 400 的修复）。
     """
     merged = {**session.context}
     for key, value in context.items():
@@ -75,10 +105,15 @@ def _apply_context_update(session: store.AgentSession, context: dict[str, Any]) 
     if merged == session.context:
         return
     session.context = merged
-    session.messages.append({
+    update_msg = {
         "role": "system",
         "content": f"上下文已更新：{json.dumps(merged, ensure_ascii=False)}",
-    })
+    }
+    insert_at = _pending_tool_call_index(session.messages)
+    if insert_at is not None:
+        session.messages.insert(insert_at, update_msg)
+    else:
+        session.messages.append(update_msg)
     store.save_session(session)
 
 
