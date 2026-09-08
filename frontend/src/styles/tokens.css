@@ -257,6 +257,27 @@
   animation: var(--animate-edge-draw);
 }
 
+/* === US-28: Agent 行为时间线动画 === */
+
+/* 时间线条目依次淡入 */
+.timeline-item {
+  animation: var(--animate-fade-in);
+}
+
+/* thinking 事件的三点跳动 */
+.thinking-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 9999px;
+  background: var(--color-text-muted);
+  animation: thinking-bounce 1.2s ease-in-out infinite;
+}
+
+@keyframes thinking-bounce {
+  0%, 80%, 100% { opacity: 0.25; transform: translateY(0); }
+  40% { opacity: 1; transform: translateY(-3px); }
+}
+
 /* === US-26: 尊重 prefers-reduced-motion === */
 @media (prefers-reduced-motion: reduce) {
   *,

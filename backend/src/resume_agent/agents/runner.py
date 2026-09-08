@@ -5,14 +5,16 @@
 - 持有并持久化完整消息历史（agent_sessions.messages_json）
 - ask_user 特判：暂停循环等待用户输入，resume 恢复
 - 每次工具调用写 agent_traces
+- 可选 on_event 回调：循环各阶段发出事件（US-28 SSE 流式消费）
 
-不负责：SSE 流式（US-28）、Reviewer 审查（US-30）、对话 UI（US-29）。
+不负责：Reviewer 审查（US-30）、对话 UI（US-29）。
 """
 
 from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -23,6 +25,8 @@ from resume_agent.config import settings
 from resume_agent.tools.agent_tools import ASK_USER_TOOL_NAME, build_registry
 
 logger = logging.getLogger("resume_agent")
+
+EventCallback = Callable[[dict[str, Any]], Awaitable[None]]
 
 AGENT_SYSTEM_PROMPT = """你是 Resume-Agent 的简历助理 Agent，帮助用户管理简历、分析 JD、生成与优化简历内容。
 
@@ -73,12 +77,14 @@ class AgentRunner:
         self,
         session_id: str,
         user_message: str | None = None,
+        on_event: EventCallback | None = None,
     ) -> AgentRunResult:
         """运行（或续跑）一个会话循环。
 
         Args:
             session_id: 会话 ID。
             user_message: 用户消息（新一轮输入），None 表示从既有历史续跑。
+            on_event: 可选事件回调（US-28 SSE），None 时行为与阻塞版一致。
 
         Returns:
             终止结果（done / awaiting_user / failed）。
@@ -116,9 +122,14 @@ class AgentRunner:
 
         session.status = "running"
         store.save_session(session, self.db_path)
-        return await self._loop(session)
+        return await self._loop(session, on_event)
 
-    async def resume(self, session_id: str, answer: str) -> AgentRunResult:
+    async def resume(
+        self,
+        session_id: str,
+        answer: str,
+        on_event: EventCallback | None = None,
+    ) -> AgentRunResult:
         """从 awaiting_user 恢复：把用户回答作为 ask_user 的 tool result。"""
         session = store.get_session(session_id, self.db_path)
         if session is None:
@@ -150,13 +161,17 @@ class AgentRunner:
         session.pending_question = None
         store.save_session(session, self.db_path)
 
-        return await self._loop(session)
+        return await self._loop(session, on_event)
 
     # ------------------------------------------------------------------
     # 内部实现
     # ------------------------------------------------------------------
 
-    async def _loop(self, session: store.AgentSession) -> AgentRunResult:
+    async def _loop(
+        self,
+        session: store.AgentSession,
+        on_event: EventCallback | None = None,
+    ) -> AgentRunResult:
         """核心循环：LLM → tool_calls → LLM，直至终结/暂停/耗尽。"""
         max_rounds = settings.agent_max_rounds
         tools_schema = self.registry.schemas()
@@ -165,6 +180,7 @@ class AgentRunner:
         try:
             for _ in range(max_rounds):
                 rounds_used += 1
+                await self._emit(on_event, {"type": "thinking", "round": rounds_used})
                 message = await self.llm.chat_raw(
                     session.messages, tools=tools_schema
                 )
@@ -174,14 +190,19 @@ class AgentRunner:
                 if not tool_calls:
                     session.status = "done"
                     store.save_session(session, self.db_path)
+                    final = getattr(message, "content", None) or ""
+                    await self._emit(on_event, {
+                        "type": "done", "status": "done",
+                        "final_message": final,
+                        "rounds_used": rounds_used,
+                    })
                     return AgentRunResult(
                         status="done",
-                        final_message=getattr(message, "content", None) or "",
+                        final_message=final,
                         rounds_used=rounds_used,
                     )
 
                 # 逐个处理本轮 tool_calls
-                paused = False
                 for tc in tool_calls:
                     tc_name = tc.function.name
                     tc_args = self._parse_arguments(tc.function.arguments)
@@ -191,12 +212,27 @@ class AgentRunner:
                         session.status = "awaiting_user"
                         session.pending_question = question
                         store.save_session(session, self.db_path)
+                        await self._emit(on_event, {
+                            "type": "ask_user", "question": question,
+                        })
+                        await self._emit(on_event, {
+                            "type": "done", "status": "awaiting_user",
+                            "pending_question": question,
+                            "rounds_used": rounds_used,
+                        })
                         return AgentRunResult(
                             status="awaiting_user",
                             pending_question=question,
                             rounds_used=rounds_used,
                         )
 
+                    await self._emit(on_event, {
+                        "type": "tool_call",
+                        "round": rounds_used,
+                        "tool_call_id": tc.id,
+                        "name": tc_name,
+                        "arguments": tc_args,
+                    })
                     result = await self.registry.execute(tc_name, tc_args)
                     store.append_trace(
                         session_id=session.id,
@@ -206,14 +242,18 @@ class AgentRunner:
                         output_data=result,
                         db_path=self.db_path,
                     )
+                    await self._emit(on_event, {
+                        "type": "tool_result",
+                        "round": rounds_used,
+                        "tool_call_id": tc.id,
+                        "name": tc_name,
+                        "result": result,
+                    })
                     session.messages.append({
                         "role": "tool",
                         "tool_call_id": tc.id,
                         "content": self._result_to_content(result),
                     })
-
-                if paused:
-                    break
 
                 store.save_session(session, self.db_path)
 
@@ -223,9 +263,15 @@ class AgentRunner:
             session.messages.append(self._message_to_dict(message))
             session.status = "done"
             store.save_session(session, self.db_path)
+            final = getattr(message, "content", None) or ""
+            await self._emit(on_event, {
+                "type": "done", "status": "done",
+                "final_message": final,
+                "rounds_used": rounds_used,
+            })
             return AgentRunResult(
                 status="done",
-                final_message=getattr(message, "content", None) or "",
+                final_message=final,
                 rounds_used=rounds_used,
                 error=f"已达最大轮数 {max_rounds}，最终响应为强制生成",
             )
@@ -234,6 +280,11 @@ class AgentRunner:
             logger.exception("Agent 循环异常")
             session.status = "failed"
             store.save_session(session, self.db_path)
+            await self._emit(on_event, {
+                "type": "error",
+                "message": str(exc),
+                "rounds_used": rounds_used,
+            })
             return AgentRunResult(
                 status="failed", error=str(exc), rounds_used=rounds_used
             )
@@ -241,6 +292,12 @@ class AgentRunner:
     # ------------------------------------------------------------------
     # 序列化辅助
     # ------------------------------------------------------------------
+
+    @staticmethod
+    async def _emit(on_event: EventCallback | None, event: dict[str, Any]) -> None:
+        """发出事件（无回调时为空操作）。"""
+        if on_event is not None:
+            await on_event(event)
 
     @staticmethod
     def _message_to_dict(message: Any) -> dict[str, Any]:

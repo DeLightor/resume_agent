@@ -326,6 +326,177 @@ def test_tool_error_does_not_break_loop(initialized_db: Any) -> None:
     assert "炸了" in tool_msgs[0]["content"]
 
 
+# === 事件钩子（US-28 agent-sse-stream Task 1）===
+
+
+def _collect_events() -> tuple[list[dict[str, Any]], Any]:
+    """构造事件收集回调与列表。"""
+    events: list[dict[str, Any]] = []
+
+    async def on_event(event: dict[str, Any]) -> None:
+        events.append(event)
+
+    return events, on_event
+
+
+def test_run_emits_event_sequence(initialized_db: Any) -> None:
+    """多轮工具调用事件序列：thinking → tool_call → tool_result → thinking → done。"""
+    session = store.create_session(db_path=initialized_db)
+    llm = _ScriptedLLM([
+        _tool_call_msg([{
+            "id": "tc1", "name": "echo",
+            "arguments": json.dumps({"text": "hi"}),
+        }]),
+        _msg("完成。"),
+    ])
+    runner = AgentRunner(
+        llm=llm, registry=_registry_with_echo(), db_path=initialized_db
+    )
+    events, on_event = _collect_events()
+
+    result = _run(runner.run(session.id, on_event=on_event))
+
+    assert result.status == "done"
+    types = [e["type"] for e in events]
+    assert types == ["thinking", "tool_call", "tool_result", "thinking", "done"]
+    assert events[0]["round"] == 1
+    assert events[1]["tool_call_id"] == "tc1"
+    assert events[1]["name"] == "echo"
+    assert events[1]["arguments"] == {"text": "hi"}
+    assert events[2]["result"] == {"echo": "hi"}
+    assert events[-1]["status"] == "done"
+    assert events[-1]["final_message"] == "完成。"
+    assert events[-1]["rounds_used"] == 2
+
+
+def test_run_emits_events_for_parallel_tool_calls(initialized_db: Any) -> None:
+    """同一轮多个 tool_calls：每个调用各发一对 tool_call/tool_result。"""
+    session = store.create_session(db_path=initialized_db)
+    llm = _ScriptedLLM([
+        _tool_call_msg([
+            {"id": "tc1", "name": "echo", "arguments": json.dumps({"text": "a"})},
+            {"id": "tc2", "name": "echo", "arguments": json.dumps({"text": "b"})},
+        ]),
+        _msg("两个都完成了。"),
+    ])
+    runner = AgentRunner(
+        llm=llm, registry=_registry_with_echo(), db_path=initialized_db
+    )
+    events, on_event = _collect_events()
+
+    _run(runner.run(session.id, on_event=on_event))
+
+    types = [e["type"] for e in events]
+    assert types == [
+        "thinking", "tool_call", "tool_result",
+        "tool_call", "tool_result", "thinking", "done",
+    ]
+    assert events[2]["result"] == {"echo": "a"}
+    assert events[4]["result"] == {"echo": "b"}
+
+
+def test_run_emits_ask_user_events(initialized_db: Any) -> None:
+    """ask_user 暂停事件序列：thinking → ask_user → done(awaiting_user)。"""
+    session = store.create_session(db_path=initialized_db)
+    llm = _ScriptedLLM([
+        _tool_call_msg([{
+            "id": "tc9", "name": "ask_user",
+            "arguments": json.dumps({"question": "你的毕业年份？"}),
+        }]),
+    ])
+    runner = AgentRunner(
+        llm=llm, registry=_registry_with_echo(), db_path=initialized_db
+    )
+    events, on_event = _collect_events()
+
+    result = _run(runner.run(session.id, on_event=on_event))
+
+    assert result.status == "awaiting_user"
+    types = [e["type"] for e in events]
+    assert types == ["thinking", "ask_user", "done"]
+    assert events[1]["question"] == "你的毕业年份？"
+    assert events[-1]["status"] == "awaiting_user"
+    assert events[-1]["pending_question"] == "你的毕业年份？"
+
+
+def test_resume_emits_events(initialized_db: Any) -> None:
+    """resume 恢复同样发事件：thinking → done。"""
+    session = store.create_session(db_path=initialized_db)
+    llm = _ScriptedLLM([
+        _tool_call_msg([{
+            "id": "tc9", "name": "ask_user",
+            "arguments": json.dumps({"question": "毕业年份？"}),
+        }]),
+        _msg("明白了。"),
+    ])
+    runner = AgentRunner(
+        llm=llm, registry=_registry_with_echo(), db_path=initialized_db
+    )
+    _run(runner.run(session.id))
+
+    events, on_event = _collect_events()
+    result = _run(runner.resume(session.id, "2025", on_event=on_event))
+
+    assert result.status == "done"
+    types = [e["type"] for e in events]
+    assert types == ["thinking", "done"]
+    assert events[-1]["final_message"] == "明白了。"
+
+
+def test_run_emits_error_event_on_exception(initialized_db: Any) -> None:
+    """LLM 调用异常 → thinking → error 事件。"""
+
+    class _BoomLLM:
+        async def chat_raw(self, messages: list[Any], tools: Any = None) -> Any:
+            raise RuntimeError("LLM 炸了")
+
+    session = store.create_session(db_path=initialized_db)
+    runner = AgentRunner(
+        llm=_BoomLLM(), registry=_registry_with_echo(), db_path=initialized_db
+    )
+    events, on_event = _collect_events()
+
+    result = _run(runner.run(session.id, on_event=on_event))
+
+    assert result.status == "failed"
+    types = [e["type"] for e in events]
+    assert types == ["thinking", "error"]
+    assert "LLM 炸了" in events[-1]["message"]
+
+
+def test_run_emits_done_event_on_rounds_exhausted(initialized_db: Any) -> None:
+    """轮次耗尽强制终结：事件序列以 done 收尾。"""
+    session = store.create_session(db_path=initialized_db)
+    llm = _ScriptedLLM([])
+    call_count = {"n": 0}
+
+    async def raw(messages: list[Any], tools: Any = None) -> Any:
+        call_count["n"] += 1
+        if call_count["n"] <= 3:
+            return _tool_call_msg([{
+                "id": f"tc-{call_count['n']}", "name": "echo",
+                "arguments": "{}",
+            }])
+        return _msg("被强制终结")
+
+    llm.chat_raw = raw  # type: ignore[method-assign]
+    runner = AgentRunner(
+        llm=llm, registry=_registry_with_echo(), db_path=initialized_db
+    )
+    events, on_event = _collect_events()
+
+    from unittest.mock import patch
+
+    with patch("resume_agent.agents.runner.settings") as mock_settings:
+        mock_settings.agent_max_rounds = 3
+        result = _run(runner.run(session.id, on_event=on_event))
+
+    assert result.status == "done"
+    assert events[-1]["type"] == "done"
+    assert events[-1]["status"] == "done"
+    assert events[-1]["final_message"] == "被强制终结"
+
+
 # === system prompt ===
 
 

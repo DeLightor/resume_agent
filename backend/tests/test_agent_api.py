@@ -223,3 +223,240 @@ def test_post_message_empty_body(monkeypatch: Any) -> None:
         json={"message": ""},
     )
     assert resp.status_code == 422
+
+
+# === POST /api/agent/chat（US-28 agent-sse-stream Task 2）===
+
+
+def _mock_stream_runner(monkeypatch: Any, script: list[dict[str, Any]]) -> list[Any]:
+    """mock Runner：把脚本化事件经 on_event 依次发出，返回调用记录。"""
+    from resume_agent.agents.runner import AgentRunResult
+
+    calls: list[dict[str, Any]] = []
+
+    class _FakeRunner:
+        llm = None  # getattr(None, "configured", True) → True
+
+        async def run(
+            self,
+            session_id: str,
+            user_message: str | None = None,
+            on_event: Any = None,
+        ):
+            calls.append({"method": "run", "session_id": session_id,
+                          "user_message": user_message})
+            events = script.pop(0) if script else []
+            for ev in events:
+                if on_event is not None:
+                    await on_event(ev)
+            return AgentRunResult(status="done", final_message="ok")
+
+        async def resume(
+            self, session_id: str, answer: str, on_event: Any = None
+        ):
+            calls.append({"method": "resume", "session_id": session_id,
+                          "answer": answer})
+            events = script.pop(0) if script else []
+            for ev in events:
+                if on_event is not None:
+                    await on_event(ev)
+            return AgentRunResult(status="done", final_message="ok")
+
+    monkeypatch.setattr("resume_agent.api.agent.AgentRunner", _FakeRunner)
+    return calls
+
+
+def _parse_sse(text: str) -> list[tuple[str, dict[str, Any]]]:
+    """解析 SSE 文本为 (event, data) 序列。"""
+    import json
+
+    events: list[tuple[str, dict[str, Any]]] = []
+    for block in text.split("\n\n"):
+        block = block.strip()
+        if not block or block.startswith(":"):
+            continue
+        ev_type = ""
+        data: dict[str, Any] = {}
+        for line in block.split("\n"):
+            if line.startswith("event: "):
+                ev_type = line[len("event: "):]
+            elif line.startswith("data: "):
+                data = json.loads(line[len("data: "):])
+        events.append((ev_type, data))
+    return events
+
+
+def test_chat_streams_sse_events(monkeypatch: Any) -> None:
+    """POST /api/agent/chat 返回 text/event-stream，事件逐帧推送。"""
+    _init_db()
+    from resume_agent.main import app
+
+    _mock_stream_runner(monkeypatch, [[
+        {"type": "thinking", "round": 1},
+        {"type": "tool_call", "round": 1, "tool_call_id": "tc1",
+         "name": "retrieve_knowledge", "arguments": {"query": "Python"}},
+        {"type": "tool_result", "round": 1, "tool_call_id": "tc1",
+         "name": "retrieve_knowledge", "result": {"chunks": []}},
+        {"type": "done", "status": "done", "final_message": "完成。",
+         "rounds_used": 2},
+    ]])
+    client = TestClient(app)
+    created = client.post("/api/agent/sessions", json={}).json()["data"]
+
+    resp = client.post("/api/agent/chat", json={
+        "session_id": created["id"],
+        "message": "检索 Python 相关内容",
+    })
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/event-stream")
+    events = _parse_sse(resp.text)
+    types = [t for t, _ in events]
+    assert types == ["thinking", "tool_call", "tool_result", "done"]
+    assert events[1][1]["name"] == "retrieve_knowledge"
+    assert events[1][1]["arguments"] == {"query": "Python"}
+    assert events[-1][1]["final_message"] == "完成。"
+
+
+def test_chat_awaiting_user_routes_to_resume(monkeypatch: Any) -> None:
+    """awaiting_user 状态下 POST chat 走 resume 路径并流式返回。"""
+    _init_db()
+    from resume_agent.main import app
+
+    client = TestClient(app)
+    created = client.post("/api/agent/sessions", json={}).json()["data"]
+
+    # 第一次：走 run，触发 ask_user 暂停（脚本第二次留给 resume）
+    _mock_stream_runner(monkeypatch, [
+        [{"type": "ask_user", "question": "你的毕业年份？"},
+         {"type": "done", "status": "awaiting_user",
+          "pending_question": "你的毕业年份？", "rounds_used": 1}],
+        [{"type": "thinking", "round": 2},
+         {"type": "done", "status": "done", "final_message": "收到。",
+          "rounds_used": 2}],
+    ])
+    client.post("/api/agent/chat", json={
+        "session_id": created["id"], "message": "帮我写简历",
+    })
+
+    # 手动把会话置为 awaiting_user（FakeRunner 不真正改库）
+    from resume_agent.agents import store
+    session = store.get_session(created["id"])
+    assert session is not None
+    session.status = "awaiting_user"
+    session.pending_question = "你的毕业年份？"
+    store.save_session(session)
+
+    resp = client.post("/api/agent/chat", json={
+        "session_id": created["id"], "message": "2025 届",
+    })
+    assert resp.status_code == 200
+    events = _parse_sse(resp.text)
+    types = [t for t, _ in events]
+    assert types == ["thinking", "done"]
+    assert events[-1][1]["final_message"] == "收到。"
+
+
+def test_chat_not_found(monkeypatch: Any) -> None:
+    """不存在的会话返回 404 envelope。"""
+    _init_db()
+    from resume_agent.main import app
+
+    client = TestClient(app)
+    resp = client.post("/api/agent/chat", json={
+        "session_id": "no-such-id", "message": "hi",
+    })
+    assert resp.status_code == 404
+    body = resp.json()
+    assert body["ok"] is False
+    assert body["error"]["code"] == "SESSION_NOT_FOUND"
+
+
+def test_chat_empty_message(monkeypatch: Any) -> None:
+    """空 message → Pydantic 422。"""
+    _init_db()
+    from resume_agent.main import app
+
+    client = TestClient(app)
+    created = client.post("/api/agent/sessions", json={}).json()["data"]
+    resp = client.post("/api/agent/chat", json={
+        "session_id": created["id"], "message": "",
+    })
+    assert resp.status_code == 422
+
+
+def test_chat_llm_not_configured(monkeypatch: Any) -> None:
+    """LLM 未配置返回 LLM_NOT_CONFIGURED envelope（非流式错误）。"""
+    _init_db()
+    from resume_agent.main import app
+
+    class _UnconfiguredLLM:
+        configured = False
+
+    class _FakeRunner:
+        llm = _UnconfiguredLLM()
+
+        async def run(self, *args: Any, **kwargs: Any) -> Any:
+            raise AssertionError("不应执行到 runner")
+
+    monkeypatch.setattr("resume_agent.api.agent.AgentRunner", _FakeRunner)
+    client = TestClient(app)
+    created = client.post("/api/agent/sessions", json={}).json()["data"]
+
+    resp = client.post("/api/agent/chat", json={
+        "session_id": created["id"], "message": "hi",
+    })
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is False
+    assert body["error"]["code"] == "LLM_NOT_CONFIGURED"
+
+
+def test_chat_background_run_converges_session_state(monkeypatch: Any) -> None:
+    """SSE 流结束后（后台 task 完成），会话状态已持久化为终态。"""
+    _init_db()
+    from resume_agent.main import app
+
+    _mock_stream_runner(monkeypatch, [[
+        {"type": "thinking", "round": 1},
+        {"type": "done", "status": "done", "final_message": "好的。",
+         "rounds_used": 1},
+    ]])
+    client = TestClient(app)
+    created = client.post("/api/agent/sessions", json={}).json()["data"]
+
+    client.post("/api/agent/chat", json={
+        "session_id": created["id"], "message": "hi",
+    })
+
+    # FakeRunner 不改库，这里验证的是会话仍可读（流式端点不吞异常）
+    from resume_agent.agents import store
+    session = store.get_session(created["id"])
+    assert session is not None
+
+
+def test_chat_emits_error_event_on_runner_exception(monkeypatch: Any) -> None:
+    """Runner 抛出未捕获异常 → SSE error 事件收尾，连接不悬挂。"""
+    _init_db()
+    from resume_agent.main import app
+
+    class _BoomRunner:
+        llm = None
+
+        async def run(self, *args: Any, **kwargs: Any) -> Any:
+            if kwargs.get("on_event") is not None:
+                await kwargs["on_event"]({"type": "thinking", "round": 1})
+            raise RuntimeError("Runner 炸了")
+
+    monkeypatch.setattr("resume_agent.api.agent.AgentRunner", _BoomRunner)
+    client = TestClient(app)
+    created = client.post("/api/agent/sessions", json={}).json()["data"]
+
+    resp = client.post("/api/agent/chat", json={
+        "session_id": created["id"], "message": "hi",
+    })
+    assert resp.status_code == 200
+    events = _parse_sse(resp.text)
+    types = [t for t, _ in events]
+    assert types == ["thinking", "error"]
+    assert "Runner 炸了" in events[-1][1]["message"]

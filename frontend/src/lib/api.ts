@@ -28,6 +28,11 @@ import type { DiffResult } from '@/types/diff';
 import type { TutorResult } from '@/types/tutor';
 import type { PersonalInfo } from '@/types/personal';
 import type { SectionItem } from '@/types/section';
+import type {
+  AgentEvent,
+  AgentSessionDetail,
+  AgentSessionSummary,
+} from '@/types/agent';
 
 const BASE_URL = '/api';
 
@@ -488,4 +493,114 @@ export async function rejectField(nodeId: string, field: string): Promise<{ reje
 export async function mergeAll(nodeId: string): Promise<{ merged_count: number; all_merged: boolean }> {
   const res = await api.post<{ merged_count: number; all_merged: boolean }>(`/tree/node/${nodeId}/merge/all`);
   return res;
+}
+
+// === US-28: Agent 会话与 SSE 对话 ===
+
+/** 创建 Agent 会话 */
+export async function createAgentSession(
+  context: Record<string, unknown> = {},
+): Promise<{ id: string; status: string }> {
+  return api.post<{ id: string; status: string }>('/agent/sessions', { context });
+}
+
+/** 会话列表（摘要，新→旧） */
+export async function listAgentSessions(): Promise<AgentSessionSummary[]> {
+  return api.get<AgentSessionSummary[]>('/agent/sessions');
+}
+
+/** 会话详情（含完整消息历史与 pending_question） */
+export async function getAgentSession(
+  sessionId: string,
+): Promise<AgentSessionDetail> {
+  return api.get<AgentSessionDetail>(`/agent/sessions/${sessionId}`);
+}
+
+/** streamAgentChat 参数 */
+export interface StreamAgentChatOptions {
+  /** 每条事件的回调 */
+  onEvent: (event: AgentEvent) => void;
+  /** 中断信号（组件卸载 / 用户取消） */
+  signal?: AbortSignal;
+}
+
+/**
+ * 连接失败（流未建立）：POST 本身失败（404 / 5xx / 网络拒绝）。
+ * 此时服务端没有后台任务在跑，调用方不应进入恢复轮询。
+ */
+export class StreamConnectError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'StreamConnectError';
+  }
+}
+
+/**
+ * SSE 流式对话：POST /api/agent/chat，逐帧解析 event/data。
+ *
+ * 用 fetch + ReadableStream 手写 SSE 解析（EventSource 仅支持 GET，
+ * 不引入第三方库）。流结束（done/error 事件后服务端关闭）时 resolve。
+ *
+ * 错误语义：
+ * - StreamConnectError：流未建立（无后台任务，无需恢复轮询）
+ * - 其他异常：流中断（后台任务可能仍在运行，调用方走 refetch 恢复）
+ */
+export async function streamAgentChat(
+  sessionId: string,
+  message: string,
+  options: StreamAgentChatOptions,
+): Promise<void> {
+  const res = await fetch(`${BASE_URL}/agent/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId, message }),
+    signal: options.signal,
+  });
+
+  if (!res.ok || !res.body) {
+    // 流开始前的协议错误（404 envelope / 422 / FastAPI 默认 404）
+    let message_ = `HTTP ${res.status}`;
+    try {
+      const json = await res.json();
+      if (json?.error?.message) message_ = json.error.message;
+      else if (json?.detail) message_ = `HTTP ${res.status}: ${json.detail}`;
+    } catch {
+      /* 保留 HTTP 状态信息 */
+    }
+    throw new StreamConnectError(message_);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  // SSE 帧以空行分隔；event:/data: 各占一行
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    let sep: number;
+    while ((sep = buffer.indexOf('\n\n')) !== -1) {
+      const block = buffer.slice(0, sep);
+      buffer = buffer.slice(sep + 2);
+
+      let eventType = '';
+      let dataJson = '';
+      for (const line of block.split('\n')) {
+        if (line.startsWith('event: ')) eventType = line.slice(7);
+        else if (line.startsWith('data: ')) dataJson = line.slice(6);
+        // `: keepalive` 注释行忽略
+      }
+      if (!eventType || !dataJson) continue;
+
+      try {
+        const payload = JSON.parse(dataJson) as AgentEvent;
+        if (payload.type !== eventType) continue; // 防御：帧与载荷不一致
+        options.onEvent(payload);
+      } catch {
+        // 单帧解析失败不中断流
+      }
+    }
+  }
 }

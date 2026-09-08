@@ -10,6 +10,7 @@ import VersionTree from '@/components/tree/VersionTree';
 import NodeDetailPanel from '@/components/tree/NodeDetailPanel';
 import CreateNodeModal from '@/components/tree/CreateNodeModal';
 import KnowledgeView from '@/components/knowledge/KnowledgeView';
+import AgentWorkbench from '@/components/agent/AgentWorkbench';
 import TemplateSelector from '@/components/template/TemplateSelector';
 import ResumePreview from '@/components/template/ResumePreview';
 import DiffView from '@/components/diff/DiffView';
@@ -367,6 +368,15 @@ export default function CenterPanel({
           refreshKey={knowledgeRefreshKey}
           onKnowledgeRefresh={onKnowledgeRefresh}
         />
+      </main>
+    );
+  }
+
+  // AI 助手视图（US-28）：渲染 AgentWorkbench（对话 + 行为时间线）
+  if (activeView === 'agent') {
+    return (
+      <main className="flex-1 flex flex-col overflow-hidden bg-bg-primary">
+        <AgentWorkbench />
       </main>
     );
   }
