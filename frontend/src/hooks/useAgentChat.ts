@@ -29,6 +29,12 @@ export interface AssistantMessageEvent {
   text: string;
 }
 
+/** agent-write-guard: 待确认写入的 UI 视图（SSE 事件与详情回放共用） */
+export interface PendingWriteView {
+  node_id: string;
+  content: unknown;
+}
+
 /** 时间线渲染事件：SSE 事件 + 本地回放消息 */
 export type TimelineEvent = AgentEvent | UserMessageEvent | AssistantMessageEvent;
 
@@ -52,6 +58,8 @@ export interface UseAgentChat {
   timeline: TimelineItem[];
   /** Agent 待回答的问题（awaiting_user 时非空） */
   pendingQuestion: string | null;
+  /** agent-write-guard: 待确认写入（写入门禁暂停时非空） */
+  pendingWrite: PendingWriteView | null;
   /** 最终回复（done 事件的 final_message） */
   finalMessage: string | null;
   /** 运行相位 */
@@ -88,6 +96,7 @@ export function useAgentChat(args?: UseAgentChatArgs): UseAgentChat {
   const [sessionStatus, setSessionStatus] = useState<string | null>(null);
   const [timeline, setTimeline] = useState<TimelineItem[]>([]);
   const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
+  const [pendingWrite, setPendingWrite] = useState<PendingWriteView | null>(null);
   const [finalMessage, setFinalMessage] = useState<string | null>(null);
   const [phase, setPhase] = useState<ChatPhase>('idle');
   const [error, setError] = useState<string | null>(null);
@@ -130,6 +139,10 @@ export function useAgentChat(args?: UseAgentChatArgs): UseAgentChat {
     switch (event.type) {
       case 'ask_user':
         setPendingQuestion(event.question);
+        setPendingWrite(null);
+        break;
+      case 'write_confirm':
+        setPendingWrite({ node_id: event.node_id, content: event.content });
         break;
       case 'done':
         setSessionStatus(event.status);
@@ -137,6 +150,7 @@ export function useAgentChat(args?: UseAgentChatArgs): UseAgentChat {
           setPendingQuestion(event.pending_question);
         } else {
           setPendingQuestion(null);
+          setPendingWrite(null);
         }
         if (event.final_message != null) setFinalMessage(event.final_message);
         break;
@@ -164,6 +178,14 @@ export function useAgentChat(args?: UseAgentChatArgs): UseAgentChat {
           setSessionStatus(detail.status);
           if (detail.status !== 'running') {
             setPendingQuestion(detail.pending_question);
+            setPendingWrite(
+              detail.pending_write
+                ? {
+                    node_id: detail.pending_write.node_id,
+                    content: detail.pending_write.content,
+                  }
+                : null,
+            );
             const last = detail.messages[detail.messages.length - 1];
             if (last?.role === 'assistant' && last.content) {
               setFinalMessage(last.content);
@@ -196,6 +218,7 @@ export function useAgentChat(args?: UseAgentChatArgs): UseAgentChat {
       setSessionContext(context ?? null);
       setTimeline([]);
       setPendingQuestion(null);
+      setPendingWrite(null);
       setFinalMessage(null);
       setError(null);
       setPhase('idle');
@@ -217,6 +240,11 @@ export function useAgentChat(args?: UseAgentChatArgs): UseAgentChat {
       setSessionStatus(detail.status);
       setSessionContext(detail.context ?? null);
       setPendingQuestion(detail.pending_question);
+      setPendingWrite(
+        detail.pending_write
+          ? { node_id: detail.pending_write.node_id, content: detail.pending_write.content }
+          : null,
+      );
       const last = detail.messages[detail.messages.length - 1];
       setFinalMessage(last?.role === 'assistant' ? last.content : null);
       // US-29：回放对话历史（用户气泡 + assistant 回复），
@@ -263,6 +291,7 @@ export function useAgentChat(args?: UseAgentChatArgs): UseAgentChat {
         },
       ]);
       setPendingQuestion(null);
+      setPendingWrite(null);
 
       const controller = new AbortController();
       abortRef.current = controller;
@@ -306,6 +335,7 @@ export function useAgentChat(args?: UseAgentChatArgs): UseAgentChat {
     sessionStatus,
     timeline,
     pendingQuestion,
+    pendingWrite,
     finalMessage,
     phase,
     error,

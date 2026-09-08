@@ -530,6 +530,261 @@ def test_run_emits_done_event_on_rounds_exhausted(initialized_db: Any) -> None:
     assert events[-1]["final_message"] == "被强制终结"
 
 
+# === write_node 门禁（agent-write-guard）===
+
+_WRITE_CONTENT: dict[str, Any] = {
+    "experience": [],
+    "skills": [{"name": "Python", "context": "FastAPI 服务开发"}],
+}
+
+
+def _registry_with_write_node(recorder: list[dict[str, Any]]):
+    """echo + 记录调用的 write_node 桩（模拟真实写入语义）。"""
+    from resume_agent.agents.registry import ToolSpec
+
+    async def write_node_stub(args: dict[str, Any]) -> dict[str, Any]:
+        recorder.append(args)
+        node_id = str(args.get("node_id", ""))
+        if not node_id:
+            return {"error": "node_id 不能为空"}
+        return {"ok": True, "node_id": node_id}
+
+    r = _registry_with_echo()
+    r.register(ToolSpec(
+        name="write_node",
+        description="write stub",
+        parameters={"type": "object", "properties": {}},
+        execute=write_node_stub,
+    ))
+    return r
+
+
+def _write_call(call_id: str, node_id: str = "master") -> Any:
+    """构造 write_node tool_call 的 assistant message mock。"""
+    return _tool_call_msg([{
+        "id": call_id, "name": "write_node",
+        "arguments": json.dumps({"node_id": node_id, "content": _WRITE_CONTENT}),
+    }])
+
+
+def test_run_write_node_gates_for_confirmation(initialized_db: Any) -> None:
+    """write_node 合法调用不直接写入：暂停等待用户确认。"""
+    recorder: list[dict[str, Any]] = []
+    session = store.create_session(db_path=initialized_db)
+    llm = _ScriptedLLM([
+        _write_call("tcw1"),
+        _msg("已写入。"),  # 若未暂停会被消费（脚本余量暴露行为）
+    ])
+    runner = AgentRunner(
+        llm=llm, registry=_registry_with_write_node(recorder),
+        db_path=initialized_db,
+    )
+    events, on_event = _collect_events()
+
+    result = _run(runner.run(session.id, on_event=on_event))
+
+    assert result.status == "awaiting_user"
+    assert result.pending_question is not None
+    # 写入未执行
+    assert recorder == []
+    # 事件序列：thinking → write_confirm → done(awaiting_user)
+    types = [e["type"] for e in events]
+    assert types == ["thinking", "write_confirm", "done"]
+    assert events[1]["node_id"] == "master"
+    assert events[1]["content"] == _WRITE_CONTENT
+    assert events[1]["question"] is not None
+    assert events[-1]["status"] == "awaiting_user"
+
+    fetched = store.get_session(session.id, initialized_db)
+    assert fetched is not None
+    assert fetched.status == "awaiting_user"
+    assert fetched.pending_write == {
+        "tool_call_id": "tcw1",
+        "node_id": "master",
+        "content": _WRITE_CONTENT,
+    }
+    # 尾部是未闭合的 assistant tool_calls
+    assert fetched.messages[-1]["role"] == "assistant"
+    assert fetched.messages[-1]["tool_calls"][0]["function"]["name"] == "write_node"
+
+
+def test_resume_confirmation_executes_write(initialized_db: Any) -> None:
+    """用户明确确认 → 执行写入，tool result 与 trace 记录 written。"""
+    recorder: list[dict[str, Any]] = []
+    session = store.create_session(db_path=initialized_db)
+    llm = _ScriptedLLM([
+        _write_call("tcw1"),
+        _msg("已写入。"),
+    ])
+    runner = AgentRunner(
+        llm=llm, registry=_registry_with_write_node(recorder),
+        db_path=initialized_db,
+    )
+    _run(runner.run(session.id))
+
+    result = _run(runner.resume(session.id, "确认"))
+
+    assert result.status == "done"
+    assert result.final_message == "已写入。"
+    # 写入已执行（且仅一次）
+    assert recorder == [{"node_id": "master", "content": _WRITE_CONTENT}]
+
+    fetched = store.get_session(session.id, initialized_db)
+    assert fetched is not None
+    assert fetched.status == "done"
+    assert fetched.pending_write is None
+    assert fetched.pending_question is None
+    # write_node tool_call 已闭合，结果是 written:true
+    tool_msgs = [m for m in fetched.messages if m["role"] == "tool"]
+    assert len(tool_msgs) == 1
+    assert tool_msgs[0]["tool_call_id"] == "tcw1"
+    payload = json.loads(tool_msgs[0]["content"])
+    assert payload["written"] is True
+    assert payload["ok"] is True
+
+    # trace 记录写入结果（round=0 表示恢复阶段解决）
+    traces = store.list_traces(session.id, initialized_db)
+    write_traces = [t for t in traces if t["tool_name"] == "write_node"]
+    assert len(write_traces) == 1
+    assert json.loads(write_traces[0]["output"])["written"] is True
+
+
+def test_resume_non_confirmation_skips_write(initialized_db: Any) -> None:
+    """非确认回复不写入：回复全文作为 user_reply 回传 LLM。"""
+    recorder: list[dict[str, Any]] = []
+    session = store.create_session(db_path=initialized_db)
+    llm = _ScriptedLLM([
+        _write_call("tcw1"),
+        _msg("好的，我先不改了。"),
+    ])
+    runner = AgentRunner(
+        llm=llm, registry=_registry_with_write_node(recorder),
+        db_path=initialized_db,
+    )
+    _run(runner.run(session.id))
+
+    result = _run(runner.resume(session.id, "先别写，把技能改成 Java"))
+
+    assert result.status == "done"
+    assert recorder == []
+
+    fetched = store.get_session(session.id, initialized_db)
+    assert fetched is not None
+    assert fetched.pending_write is None
+    tool_msgs = [m for m in fetched.messages if m["role"] == "tool"]
+    payload = json.loads(tool_msgs[0]["content"])
+    assert payload["written"] is False
+    assert payload["user_reply"] == "先别写，把技能改成 Java"
+
+    traces = store.list_traces(session.id, initialized_db)
+    write_traces = [t for t in traces if t["tool_name"] == "write_node"]
+    assert len(write_traces) == 1
+    assert json.loads(write_traces[0]["output"])["written"] is False
+
+
+def test_write_node_re_gates_after_confirmation(initialized_db: Any) -> None:
+    """确认写入后 Agent 再次发起写入 → 再次进入门禁（每轮都需确认）。"""
+    recorder: list[dict[str, Any]] = []
+    session = store.create_session(db_path=initialized_db)
+    llm = _ScriptedLLM([
+        _write_call("tcw1"),
+        _write_call("tcw2"),
+        _msg("两次都写入了。"),
+    ])
+    runner = AgentRunner(
+        llm=llm, registry=_registry_with_write_node(recorder),
+        db_path=initialized_db,
+    )
+
+    result1 = _run(runner.run(session.id))
+    assert result1.status == "awaiting_user"
+
+    result2 = _run(runner.resume(session.id, "确认"))
+    # 第二次 write_node 再次门禁
+    assert result2.status == "awaiting_user"
+    assert recorder == [{"node_id": "master", "content": _WRITE_CONTENT}]
+
+    result3 = _run(runner.resume(session.id, "好的"))
+    assert result3.status == "done"
+    assert recorder == [
+        {"node_id": "master", "content": _WRITE_CONTENT},
+        {"node_id": "master", "content": _WRITE_CONTENT},
+    ]
+
+
+def test_write_node_invalid_args_skips_gate(initialized_db: Any) -> None:
+    """非法参数（缺 node_id）不触发门禁：错误 tool result 原路返回。"""
+    recorder: list[dict[str, Any]] = []
+    session = store.create_session(db_path=initialized_db)
+    llm = _ScriptedLLM([
+        _tool_call_msg([{
+            "id": "tcw1", "name": "write_node",
+            "arguments": json.dumps({"content": _WRITE_CONTENT}),  # 缺 node_id
+        }]),
+        _msg("参数错了。"),
+    ])
+    runner = AgentRunner(
+        llm=llm, registry=_registry_with_write_node(recorder),
+        db_path=initialized_db,
+    )
+
+    result = _run(runner.run(session.id))
+
+    # 不暂停：参数错误直接作为 tool result 回传
+    assert result.status == "done"
+    fetched = store.get_session(session.id, initialized_db)
+    assert fetched is not None
+    assert fetched.pending_write is None
+    tool_msgs = [m for m in fetched.messages if m["role"] == "tool"]
+    assert len(tool_msgs) == 1
+    payload = json.loads(tool_msgs[0]["content"])
+    assert "error" in payload
+
+
+def test_is_write_confirmation_lexicon() -> None:
+    """确认词表：整句明确同意才确认（安全默认，误判方向必须安全）。"""
+    from resume_agent.agents.runner import is_write_confirmation
+
+    # 明确确认
+    for reply in [
+        "确认", "确认。", "确认！", "同意", "同意写入", "确认写入",
+        "好的", "好", "好的吧", "可以", "没问题", "嗯", "行",
+        "写入", "执行", " OK ", "ok!", "Okay", "yes", "Y",
+    ]:
+        assert is_write_confirmation(reply), reply
+
+    # 拒绝 / 自由文本 / 疑问一律不确认
+    for reply in [
+        "", "不要", "取消", "先别写", "改一下再写",
+        "确认吗", "确认一下再写", "好的，但是项目名要改成 X",
+        "帮我确认一下", "再想想", "不对",
+    ]:
+        assert not is_write_confirmation(reply), reply
+
+
+def test_ask_user_path_unaffected_by_write_guard(initialized_db: Any) -> None:
+    """ask_user 暂停/恢复不因 pending_write 机制受影响（回归）。"""
+    recorder: list[dict[str, Any]] = []
+    session = store.create_session(db_path=initialized_db)
+    llm = _ScriptedLLM([
+        _tool_call_msg([{
+            "id": "tc9", "name": "ask_user",
+            "arguments": json.dumps({"question": "你的毕业年份？"}),
+        }]),
+        _msg("明白了。"),
+    ])
+    runner = AgentRunner(
+        llm=llm, registry=_registry_with_write_node(recorder),
+        db_path=initialized_db,
+    )
+    result1 = _run(runner.run(session.id))
+    assert result1.status == "awaiting_user"
+
+    result2 = _run(runner.resume(session.id, "2025 届"))
+    assert result2.status == "done"
+    assert result2.final_message == "明白了。"
+
+
 # === system prompt ===
 
 

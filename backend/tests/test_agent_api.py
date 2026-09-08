@@ -387,6 +387,66 @@ def test_chat_empty_message(monkeypatch: Any) -> None:
     assert resp.status_code == 422
 
 
+# === write_node 门禁契约（agent-write-guard）===
+
+
+def test_get_session_detail_returns_pending_write(monkeypatch: Any) -> None:
+    """会话详情返回 pending_write（前端恢复确认卡片的依据）。"""
+    _init_db()
+    from resume_agent.agents import store
+    from resume_agent.main import app
+
+    client = TestClient(app)
+    created = client.post("/api/agent/sessions", json={}).json()["data"]
+
+    session = store.get_session(created["id"])
+    assert session is not None
+    session.status = "awaiting_user"
+    session.pending_question = "确认写入节点 master？"
+    session.pending_write = {
+        "tool_call_id": "tc1",
+        "node_id": "master",
+        "content": {"skills": []},
+    }
+    store.save_session(session)
+
+    resp = client.get(f"/api/agent/sessions/{created['id']}")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["data"]["pending_write"] == {
+        "tool_call_id": "tc1",
+        "node_id": "master",
+        "content": {"skills": []},
+    }
+
+
+def test_chat_streams_write_confirm_event(monkeypatch: Any) -> None:
+    """write_confirm 事件经 SSE 帧透传（含待写入内容）。"""
+    _init_db()
+    from resume_agent.main import app
+
+    _mock_stream_runner(monkeypatch, [[
+        {"type": "write_confirm", "node_id": "master",
+         "content": {"skills": []}, "question": "确认写入节点 master？"},
+        {"type": "done", "status": "awaiting_user",
+         "pending_question": "确认写入节点 master？", "rounds_used": 1},
+    ]])
+    client = TestClient(app)
+    created = client.post("/api/agent/sessions", json={}).json()["data"]
+
+    resp = client.post("/api/agent/chat", json={
+        "session_id": created["id"], "message": "帮我优化",
+    })
+    assert resp.status_code == 200
+    events = _parse_sse(resp.text)
+    types = [t for t, _ in events]
+    assert types == ["write_confirm", "done"]
+    assert events[0][1]["node_id"] == "master"
+    assert events[0][1]["content"] == {"skills": []}
+    assert events[-1][1]["status"] == "awaiting_user"
+
+
 def test_chat_llm_not_configured(monkeypatch: Any) -> None:
     """LLM 未配置返回 LLM_NOT_CONFIGURED envelope（非流式错误）。"""
     _init_db()

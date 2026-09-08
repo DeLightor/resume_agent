@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import sqlite3
 import uuid
 from importlib import resources
@@ -44,6 +45,7 @@ def init_database(db_path: Path | str | None = None) -> None:
     with get_connection(path) as conn:
         conn.executescript(schema_sql)
         _migrate_upstream_columns(conn)
+        _migrate_agent_session_columns(conn)
         _seed_master_node(conn)
 
 
@@ -61,6 +63,12 @@ def _migrate_upstream_columns(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE resume_versions ADD COLUMN {col_def}")
         except sqlite3.OperationalError:
             pass  # 列已存在
+
+
+def _migrate_agent_session_columns(conn: sqlite3.Connection) -> None:
+    """agent-write-guard: 幂等添加 agent_sessions.pending_write_json 列。"""
+    with contextlib.suppress(sqlite3.OperationalError):  # 列已存在
+        conn.execute("ALTER TABLE agent_sessions ADD COLUMN pending_write_json TEXT")
 
 
 def _seed_master_node(conn: sqlite3.Connection) -> None:

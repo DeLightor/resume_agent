@@ -80,6 +80,7 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
     context_json     TEXT,                      -- JSON: {current_node_id, jd_summary, ...}
     messages_json    TEXT NOT NULL DEFAULT '[]',-- JSON: OpenAI 协议消息数组（含 tool_calls / tool results）
     pending_question TEXT,                      -- awaiting_user 时的待答问题
+    pending_write_json TEXT,                    -- agent-write-guard: JSON {tool_call_id, node_id, content} 待确认写入
 
     created_at       TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at       TEXT NOT NULL DEFAULT (datetime('now'))

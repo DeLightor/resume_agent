@@ -34,6 +34,10 @@ logger = logging.getLogger("resume_agent")
 
 ASK_USER_TOOL_NAME = "ask_user"
 
+# agent-write-guard: write_node 由 AgentRunner 特判暂停（等待用户确认），
+# 确认后仍经 registry.execute 执行本文件中的 _write_node。
+WRITE_NODE_TOOL_NAME = "write_node"
+
 
 async def _retrieve_knowledge(args: dict[str, Any]) -> list[dict[str, Any]]:
     """知识库语义检索。"""
@@ -232,7 +236,11 @@ def build_registry() -> ToolRegistry:
 
     registry.register(ToolSpec(
         name="write_node",
-        description="写入版本树节点的完整简历内容（整段覆盖，需谨慎使用）。",
+        description=(
+            "写入版本树节点的完整简历内容（整段覆盖）。调用后系统会暂停并"
+            "向用户展示待写入内容，用户明确确认后才真正写入；被拒绝时"
+            "根据用户反馈修改后可再次调用。"
+        ),
         parameters={
             "type": "object",
             "properties": {
@@ -330,4 +338,4 @@ def build_registry() -> ToolRegistry:
     return registry
 
 
-__all__ = ["build_registry", "ASK_USER_TOOL_NAME"]
+__all__ = ["build_registry", "ASK_USER_TOOL_NAME", "WRITE_NODE_TOOL_NAME"]

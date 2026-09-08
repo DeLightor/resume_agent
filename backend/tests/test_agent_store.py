@@ -122,6 +122,73 @@ def test_append_and_list_traces(initialized_db: Any) -> None:
     assert traces[1]["tool_name"] == "read_node"
 
 
+# === pending_write 持久化（agent-write-guard）===
+
+
+def test_pending_write_roundtrip(initialized_db: Any) -> None:
+    """pending_write 序列化往返：保存/读取/清空。"""
+    from resume_agent.agents import store
+
+    s = store.create_session(db_path=initialized_db)
+    s.status = "awaiting_user"
+    s.pending_question = "确认写入节点 master？"
+    s.pending_write = {
+        "tool_call_id": "tc1",
+        "node_id": "master",
+        "content": {"skills": [{"name": "Python"}]},
+    }
+    store.save_session(s, initialized_db)
+
+    fetched = store.get_session(s.id, initialized_db)
+    assert fetched is not None
+    assert fetched.status == "awaiting_user"
+    assert fetched.pending_write == {
+        "tool_call_id": "tc1",
+        "node_id": "master",
+        "content": {"skills": [{"name": "Python"}]},
+    }
+
+    # 清空后保存
+    fetched.pending_write = None
+    fetched.pending_question = None
+    store.save_session(fetched, initialized_db)
+    again = store.get_session(s.id, initialized_db)
+    assert again is not None
+    assert again.pending_write is None
+
+
+def test_pending_write_column_migrated(tmp_db_path: Any) -> None:
+    """老库（无 pending_write_json 列）经 init_database 幂等补列。"""
+    import sqlite3
+
+    from resume_agent.db.init_db import init_database
+
+    # 模拟旧版 schema 建表（不含新列）
+    conn = sqlite3.connect(tmp_db_path)
+    conn.execute(
+        "CREATE TABLE agent_sessions ("
+        " id TEXT PRIMARY KEY,"
+        " status TEXT NOT NULL DEFAULT 'running',"
+        " context_json TEXT,"
+        " messages_json TEXT NOT NULL DEFAULT '[]',"
+        " pending_question TEXT,"
+        " created_at TEXT NOT NULL DEFAULT (datetime('now')),"
+        " updated_at TEXT NOT NULL DEFAULT (datetime('now')))"
+    )
+    conn.commit()
+    conn.close()
+
+    init_database(tmp_db_path)  # 幂等迁移补列
+
+    conn = sqlite3.connect(tmp_db_path)
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(agent_sessions)")}
+    conn.close()
+    assert "pending_write_json" in cols
+
+    # 再次 init 幂等（不因列已存在报错）
+    init_database(tmp_db_path)
+
+
 def test_append_trace_output_truncated(initialized_db: Any) -> None:
     """超过 4KB 的输出被截断存储。"""
     from resume_agent.agents import store

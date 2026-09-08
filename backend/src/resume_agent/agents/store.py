@@ -35,6 +35,9 @@ class AgentSession:
     context: dict[str, Any] = field(default_factory=dict)
     messages: list[dict[str, Any]] = field(default_factory=list)
     pending_question: str | None = None
+    # agent-write-guard: awaiting_user 时待确认的写入
+    # {tool_call_id, node_id, content}；resume 仲裁后清空。
+    pending_write: dict[str, Any] | None = None
     created_at: str | None = None
     updated_at: str | None = None
 
@@ -94,13 +97,16 @@ def save_session(session: AgentSession, db_path: Path | str | None = None) -> No
     with get_connection(db_path) as conn:
         conn.execute(
             "UPDATE agent_sessions SET status = ?, context_json = ?,"
-            " messages_json = ?, pending_question = ?,"
+            " messages_json = ?, pending_question = ?, pending_write_json = ?,"
             " updated_at = datetime('now') WHERE id = ?",
             [
                 session.status,
                 json.dumps(session.context, ensure_ascii=False),
                 json.dumps(session.messages, ensure_ascii=False),
                 session.pending_question,
+                json.dumps(session.pending_write, ensure_ascii=False)
+                if session.pending_write is not None
+                else None,
                 session.id,
             ],
         )
@@ -187,6 +193,7 @@ def _row_to_session(row: dict[str, Any]) -> AgentSession:
         context=_loads_or(row["context_json"], {}),
         messages=_loads_or(row["messages_json"], []),
         pending_question=row["pending_question"],
+        pending_write=_loads_or(row.get("pending_write_json"), None),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )

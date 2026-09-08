@@ -25,10 +25,18 @@ export interface AgentMessage {
   }[];
 }
 
+/** agent-write-guard: awaiting_user 时待确认的写入 */
+export interface PendingWrite {
+  tool_call_id: string;
+  node_id: string;
+  content: unknown;
+}
+
 /** 会话详情（GET /api/agent/sessions/{id}） */
 export interface AgentSessionDetail extends AgentSessionSummary {
   messages: AgentMessage[];
   pending_question: string | null;
+  pending_write: PendingWrite | null;
 }
 
 /** SSE 事件载荷（event 帧的 data JSON） */
@@ -49,6 +57,13 @@ export type AgentEvent =
       result: unknown;
     }
   | { type: 'ask_user'; question: string }
+  /** agent-write-guard: write_node 待用户确认 */
+  | {
+      type: 'write_confirm';
+      node_id: string;
+      content: unknown;
+      question: string;
+    }
   | {
       type: 'done';
       status: AgentSessionStatus;

@@ -112,6 +112,31 @@ function UserTimelineItem({ text }: { text: string }) {
   );
 }
 
+/** agent-write-guard：write_confirm 时间线条目（待写入内容可展开预览） */
+function WriteConfirmTimelineItem({ item }: { item: TimelineItem }) {
+  const [open, setOpen] = useState(false);
+  const event = item.event;
+  if (event.type !== 'write_confirm') return null;
+  return (
+    <div className="timeline-item">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-2 text-left w-full cursor-pointer border-none bg-transparent p-0 hover:text-brand-primary transition-colors duration-200"
+      >
+        <span className="w-2 h-2 rounded-full shrink-0 bg-amber-500" />
+        <span className="text-sm font-medium">请求写入节点「{event.node_id}」</span>
+        <span className="text-xs text-text-muted ml-auto">{open ? '收起 ▲' : '展开 ▼'}</span>
+      </button>
+      {open && (
+        <div className="mt-2 ml-4">
+          <JsonBlock data={event.content} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** 普通时间线条目（thinking / ask_user / done / error / 历史回放） */
 function SimpleTimelineItem({ item }: { item: TimelineItem }) {
   const event = item.event;
@@ -192,6 +217,7 @@ export default function AgentWorkbench({
     sessionStatus,
     timeline,
     pendingQuestion,
+    pendingWrite,
     phase,
     error,
     sessionContext,
@@ -202,6 +228,7 @@ export default function AgentWorkbench({
 
   const [input, setInput] = useState('');
   const [answer, setAnswer] = useState('');
+  const [writeFeedback, setWriteFeedback] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
   /** pendingAsk 消费中防重入（创建会话是异步的） */
   const consumingAskRef = useRef(false);
@@ -319,14 +346,16 @@ export default function AgentWorkbench({
               return item.event.type === 'tool_call' ||
                 item.event.type === 'tool_result' ? (
                 <ToolTimelineItem key={item.id} item={item} hasResult />
+              ) : item.event.type === 'write_confirm' ? (
+                <WriteConfirmTimelineItem key={item.id} item={item} />
               ) : (
                 <SimpleTimelineItem key={item.id} item={item} />
               );
             })}
           </div>
 
-          {/* ask_user 回答卡片 */}
-          {pendingQuestion && phase !== 'streaming' && (
+          {/* ask_user 回答卡片（写入门禁暂停时由写入确认卡片代替） */}
+          {pendingQuestion && !pendingWrite && phase !== 'streaming' && (
             <div className="mt-4 ml-4 p-3 rounded-lg border border-amber-300 bg-amber-50">
               <p className="text-sm font-medium text-amber-800">
                 {pendingQuestion}
@@ -357,6 +386,72 @@ export default function AgentWorkbench({
                   className="px-3 py-1.5 rounded-md text-sm bg-brand-primary text-white border-none cursor-pointer hover:bg-brand-primary-hover transition-colors duration-200"
                 >
                   回答
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* agent-write-guard：写入确认卡片（确认 / 拒绝 / 修改意见） */}
+          {pendingWrite && phase !== 'streaming' && (
+            <div className="mt-4 ml-4 p-3 rounded-lg border border-brand-primary bg-bg-secondary">
+              <p className="text-sm font-medium text-text-primary">
+                Agent 请求写入节点「{pendingWrite.node_id}」的简历内容（整段覆盖），请确认。
+              </p>
+              <details className="mt-2">
+                <summary className="text-xs text-text-secondary cursor-pointer">
+                  查看待写入内容
+                </summary>
+                <div className="mt-1">
+                  <JsonBlock data={pendingWrite.content} />
+                </div>
+              </details>
+              <div className="flex gap-2 mt-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    void send('确认写入');
+                    setWriteFeedback('');
+                  }}
+                  className="px-3 py-1.5 rounded-md text-sm bg-emerald-600 text-white border-none cursor-pointer hover:bg-emerald-700 transition-colors duration-200"
+                >
+                  确认写入
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void send('暂不写入');
+                    setWriteFeedback('');
+                  }}
+                  className="px-3 py-1.5 rounded-md text-sm bg-bg-tertiary text-text-primary border border-border-default cursor-pointer hover:bg-bg-hover transition-colors duration-200"
+                >
+                  暂不写入
+                </button>
+              </div>
+              <div className="flex gap-2 mt-2">
+                <input
+                  value={writeFeedback}
+                  onChange={(e) => setWriteFeedback(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && writeFeedback.trim()) {
+                      void send(writeFeedback.trim()).then((ok) => {
+                        if (ok) setWriteFeedback('');
+                      });
+                    }
+                  }}
+                  placeholder="或输入修改意见（如「技能部分再精简一些」）…"
+                  className="flex-1 px-3 py-1.5 rounded-md text-sm border border-border-default focus:outline-none focus:border-brand-primary"
+                />
+                <button
+                  type="button"
+                  disabled={!writeFeedback.trim()}
+                  onClick={() => {
+                    void send(writeFeedback.trim()).then((ok) => {
+                      if (ok) setWriteFeedback('');
+                    });
+                  }}
+                  className="px-3 py-1.5 rounded-md text-sm bg-brand-primary text-white border-none cursor-pointer hover:bg-brand-primary-hover transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  发送意见
                 </button>
               </div>
             </div>

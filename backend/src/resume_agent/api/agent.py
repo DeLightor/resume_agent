@@ -121,6 +121,7 @@ async def get_session(session_id: str) -> dict[str, Any]:
         "context": session.context,
         "messages": session.messages,
         "pending_question": session.pending_question,
+        "pending_write": session.pending_write,
         "created_at": session.created_at,
         "updated_at": session.updated_at,
     })

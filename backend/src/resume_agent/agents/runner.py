@@ -4,6 +4,7 @@
 - 驱动 LLM ↔ 工具的多轮循环（DeepSeek function calling 协议）
 - 持有并持久化完整消息历史（agent_sessions.messages_json）
 - ask_user 特判：暂停循环等待用户输入，resume 恢复
+- write_node 门禁（agent-write-guard）：合法写入先暂停，用户确认后执行
 - 每次工具调用写 agent_traces
 - 可选 on_event 回调：循环各阶段发出事件（US-28 SSE 流式消费）
 
@@ -22,7 +23,11 @@ from typing import Any
 from resume_agent.agents import store
 from resume_agent.agents.registry import ToolRegistry
 from resume_agent.config import settings
-from resume_agent.tools.agent_tools import ASK_USER_TOOL_NAME, build_registry
+from resume_agent.tools.agent_tools import (
+    ASK_USER_TOOL_NAME,
+    WRITE_NODE_TOOL_NAME,
+    build_registry,
+)
 
 logger = logging.getLogger("resume_agent")
 
@@ -34,7 +39,33 @@ AGENT_SYSTEM_PROMPT = """你是 Resume-Agent 的简历助理 Agent，帮助用�
 1. 诚实优先：简历内容必须基于知识库中的真实素材，先调用 retrieve_knowledge 检索证据，禁止编造经历或量化数据。
 2. 需要澄清时直接调用 ask_user 向用户提问，不要自行猜测。
 3. 修改用户简历节点前，先 read_node 了解现状。
-4. 每次回复使用简洁的中文，先给结论再说理由。"""
+4. 修改简历内容通过 write_node 发起：系统会暂停向用户展示待写入内容，用户明确同意后才真正写入；被拒绝时根据用户反馈调整后重新发起。
+5. 每次回复使用简洁的中文，先给结论再说理由。"""
+
+# ---------------------------------------------------------------------------
+# write_node 确认词表（agent-write-guard）
+# ---------------------------------------------------------------------------
+
+# 整句命中才算确认；误判方向必须安全：
+# 假阴性（本意同意但未写入）无害——LLM 会再发起；
+# 假阳性（本意拒绝但写入了）危险——自由文本一律不匹配。
+_WRITE_CONFIRM_LEXICON = frozenset({
+    "确认", "确认写入", "同意", "同意写入", "写入", "执行",
+    "好的", "好", "可以", "没问题", "行", "嗯", "恩",
+    "ok", "okay", "yes", "y",
+})
+
+# 规范化时去除的首尾标点与结尾语气词
+_WRITE_STRIP_CHARS = "。！？!?,，.、~～ \t\n"
+_WRITE_TONE_SUFFIXES = ("吧", "呢", "啊", "呀", "哈")
+
+
+def is_write_confirmation(reply: str) -> bool:
+    """判断用户回复是否为对 pending_write 的明确确认（整句匹配）。"""
+    text = (reply or "").strip().lower().strip(_WRITE_STRIP_CHARS)
+    while text and text[-1] in _WRITE_TONE_SUFFIXES:
+        text = text[:-1].strip(_WRITE_STRIP_CHARS)
+    return text in _WRITE_CONFIRM_LEXICON
 
 
 @dataclass
@@ -143,6 +174,10 @@ class AgentRunner:
                 error=f"会话不在待回答状态（当前: {session.status}），无法恢复",
             )
 
+        # agent-write-guard：待确认写入优先仲裁（与 ask_user 互斥）
+        if session.pending_write:
+            return await self._resume_pending_write(session, answer, on_event)
+
         ask_call_id = self._find_unclosed_ask_user(session.messages)
         if ask_call_id is None:
             session.status = "failed"
@@ -168,6 +203,61 @@ class AgentRunner:
     # ------------------------------------------------------------------
     # 内部实现
     # ------------------------------------------------------------------
+
+    async def _resume_pending_write(
+        self,
+        session: store.AgentSession,
+        answer: str,
+        on_event: EventCallback | None = None,
+    ) -> AgentRunResult:
+        """write 确认仲裁（agent-write-guard）。
+
+        确认词命中 → 执行写入；其余回复（含拒绝/修改意见）一律不写入，
+        回复全文作为 tool result 回传 LLM 继续编排。
+        """
+        pending = session.pending_write or {}
+        tool_call_id = str(pending.get("tool_call_id", ""))
+        node_id = str(pending.get("node_id", ""))
+        content = pending.get("content")
+
+        session.pending_write = None
+        session.pending_question = None
+
+        if is_write_confirmation(answer):
+            result = await self.registry.execute(
+                WRITE_NODE_TOOL_NAME, {"node_id": node_id, "content": content}
+            )
+            written = isinstance(result, dict) and result.get("ok") is True
+            tool_result: dict[str, Any] = {
+                "ok": written,
+                "written": written,
+                "node_id": node_id,
+            }
+            if not written:
+                tool_result["error"] = (
+                    result.get("error")
+                    if isinstance(result, dict)
+                    else f"写入失败: {result}"
+                )
+        else:
+            tool_result = {"ok": False, "written": False, "user_reply": answer}
+
+        session.messages.append({
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "content": self._result_to_content(tool_result),
+        })
+        store.append_trace(
+            session_id=session.id,
+            round=0,  # 0 = 恢复阶段解决的写入确认，非循环轮次
+            tool_name=WRITE_NODE_TOOL_NAME,
+            input_data={"node_id": node_id, "content": content},
+            output_data=tool_result,
+            db_path=self.db_path,
+        )
+        session.status = "running"
+        store.save_session(session, self.db_path)
+        return await self._loop(session, on_event)
 
     async def _loop(
         self,
@@ -216,6 +306,40 @@ class AgentRunner:
                         store.save_session(session, self.db_path)
                         await self._emit(on_event, {
                             "type": "ask_user", "question": question,
+                        })
+                        await self._emit(on_event, {
+                            "type": "done", "status": "awaiting_user",
+                            "pending_question": question,
+                            "rounds_used": rounds_used,
+                        })
+                        return AgentRunResult(
+                            status="awaiting_user",
+                            pending_question=question,
+                            rounds_used=rounds_used,
+                        )
+
+                    # agent-write-guard：合法 write_node 不直接写入，
+                    # 暂停等待用户确认（非法参数走下方正常执行路径回错误）。
+                    if tc_name == WRITE_NODE_TOOL_NAME and self._is_gated_write(tc_args):
+                        node_id = str(tc_args.get("node_id", "")).strip()
+                        content = tc_args.get("content")
+                        question = (
+                            f"Agent 请求写入节点「{node_id}」的简历内容（整段覆盖）。"
+                            "回复「确认」执行写入，或说明你的修改意见。"
+                        )
+                        session.status = "awaiting_user"
+                        session.pending_question = question
+                        session.pending_write = {
+                            "tool_call_id": tc.id,
+                            "node_id": node_id,
+                            "content": content,
+                        }
+                        store.save_session(session, self.db_path)
+                        await self._emit(on_event, {
+                            "type": "write_confirm",
+                            "node_id": node_id,
+                            "content": content,
+                            "question": question,
                         })
                         await self._emit(on_event, {
                             "type": "done", "status": "awaiting_user",
@@ -300,6 +424,15 @@ class AgentRunner:
         """发出事件（无回调时为空操作）。"""
         if on_event is not None:
             await on_event(event)
+
+    @staticmethod
+    def _is_gated_write(tc_args: dict[str, Any]) -> bool:
+        """write_node 参数合法（node_id 非空 + content 为对象）才走门禁。
+
+        非法参数直接按普通工具执行，错误 envelope 原路返回，不打扰用户。
+        """
+        node_id = str(tc_args.get("node_id", "") or "").strip()
+        return bool(node_id) and isinstance(tc_args.get("content"), dict)
 
     @staticmethod
     def _message_to_dict(message: Any) -> dict[str, Any]:
