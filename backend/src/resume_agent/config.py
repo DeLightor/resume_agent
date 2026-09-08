@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     # === Tavily Web 搜索 API（US-11 导师建议增强）===
     tavily_api_key: str = ""
 
+    # === Agent Runtime（US-27 agent-runtime）===
+    agent_max_rounds: int = 8  # Agent Loop 最大 LLM 调用轮数
+
     # === 数据存储 ===
     resume_agent_home: Path = Path.home() / ".resume-agent"
     sqlite_path: Path = Path.home() / ".resume-agent" / "data.db"

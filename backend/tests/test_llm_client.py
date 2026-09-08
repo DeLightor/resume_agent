@@ -30,7 +30,8 @@ def test_init_defaults_from_settings() -> None:
     client = LLMClient()
     # settings 在 conftest 中被隔离，llm_api_key 默认为空字符串
     assert client.api_key == settings_value("llm_api_key")
-    assert client.model == "gpt-4o"
+    # model 取 settings 当前值（.env 可能配置了非默认模型，不硬编码）
+    assert client.model == settings_value("llm_model")
 
 
 def settings_value(name: str) -> Any:
@@ -158,3 +159,85 @@ def test_get_default_client() -> None:
     client = get_default_client()
     assert isinstance(client, LLMClient)
     assert client.api_key == settings_value("llm_api_key")
+
+
+# ============================================================
+# chat_raw（US-27 agent-runtime Task 2.1）
+# ============================================================
+
+
+def _build_mock_raw_response(message: Any) -> MagicMock:
+    """构造 chat_raw 用的响应：choices[0].message 为给定 message。"""
+    response = MagicMock()
+    choice = MagicMock()
+    choice.message = message
+    response.choices = [choice]
+    return response
+
+
+async def test_chat_raw_passes_messages_and_tools() -> None:
+    """chat_raw 透传 messages / tools 并返回原始 message（含 tool_calls）。"""
+    tool_message = MagicMock()
+    tool_message.content = ""
+    tool_message.tool_calls = [
+        MagicMock(id="tc1", function=MagicMock(name="f", arguments="{}"))
+    ]
+    # MagicMock 的 function.name 会与构造器 name 冲突，显式设置
+    tool_message.tool_calls[0].function.name = "retrieve_knowledge"
+
+    client = LLMClient(api_key="sk-test")
+    with patch("resume_agent.llm.client.AsyncOpenAI") as mock_openai_cls:
+        mock_client = MagicMock()
+        mock_client.chat.completions.create = AsyncMock(
+            return_value=_build_mock_raw_response(tool_message)
+        )
+        mock_openai_cls.return_value = mock_client
+
+        messages = [{"role": "user", "content": "hi"}]
+        tools = [{"type": "function", "function": {"name": "retrieve_knowledge"}}]
+        result = await client.chat_raw(messages, tools=tools)
+
+    assert result is tool_message
+    call_kwargs = mock_client.chat.completions.create.call_args.kwargs
+    assert call_kwargs["messages"] == messages
+    assert call_kwargs["tools"] == tools
+    assert call_kwargs["model"] == client.model
+
+
+async def test_chat_raw_without_tools_omits_key() -> None:
+    """不传 tools 时请求参数不带 tools 键。"""
+    plain = MagicMock()
+    plain.content = "final answer"
+    plain.tool_calls = None
+
+    client = LLMClient(api_key="sk-test")
+    with patch("resume_agent.llm.client.AsyncOpenAI") as mock_openai_cls:
+        mock_client = MagicMock()
+        mock_client.chat.completions.create = AsyncMock(
+            return_value=_build_mock_raw_response(plain)
+        )
+        mock_openai_cls.return_value = mock_client
+
+        result = await client.chat_raw([{"role": "user", "content": "hi"}])
+
+    assert result is plain
+    call_kwargs = mock_client.chat.completions.create.call_args.kwargs
+    assert "tools" not in call_kwargs
+
+
+async def test_chat_raw_requires_api_key() -> None:
+    """api_key 为空时抛 RuntimeError。"""
+    client = LLMClient(api_key="")
+    with pytest.raises(RuntimeError, match="LLM not configured"):
+        await client.chat_raw([{"role": "user", "content": "hi"}])
+
+
+def test_agent_max_rounds_default_and_env_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """agent_max_rounds 默认 8，环境变量可覆盖。"""
+    from resume_agent.config import Settings
+
+    assert Settings().agent_max_rounds == 8
+    monkeypatch.setenv("AGENT_MAX_ROUNDS", "3")
+    assert Settings().agent_max_rounds == 3

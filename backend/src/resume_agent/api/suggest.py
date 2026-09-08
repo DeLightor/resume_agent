@@ -17,9 +17,9 @@ from resume_agent.api.generate import (
     _collect_search_queries,
     _format_evidence_for_prompt,
     _parse_json_safely,
-    _search_knowledge_base,
 )
 from resume_agent.api.response import error, success
+from resume_agent.services.knowledge_search import search_knowledge
 
 logger = logging.getLogger("resume_agent")
 
@@ -248,7 +248,7 @@ async def _generate_suggestions(
         return []
 
     # 2. 知识库检索
-    evidence = _search_knowledge_base(queries)
+    evidence = search_knowledge(queries)
     if not evidence:
         # 知识库为空，返回空建议列表
         return []

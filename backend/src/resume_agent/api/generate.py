@@ -20,14 +20,15 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from resume_agent.api.response import error, success
+from resume_agent.services.knowledge_search import search_knowledge
+from resume_agent.services.node_content import (
+    get_node_content,
+    save_node_content,
+)
 
 logger = logging.getLogger("resume_agent")
 
 router = APIRouter(prefix="/generate", tags=["generate"])
-
-# 检索配置
-_SEARCH_TOP_K: int = 3
-_MAX_EVIDENCE_CHUNKS: int = 10  # 合并后最多保留的切片数
 
 # 段落类型
 _SECTIONS: tuple[str, ...] = ("experience", "projects", "skills")
@@ -158,67 +159,6 @@ def _collect_search_queries(structured_jd: dict[str, Any]) -> list[str]:
             seen.add(q)
             unique.append(q)
     return unique
-
-
-def _search_knowledge_base(queries: list[str]) -> list[dict[str, Any]]:
-    """对多个查询词在知识库中检索，合并去重。
-
-    Returns:
-        [{"chunk_text": ..., "source_file": ..., "score": ...}, ...]
-    """
-    if not queries:
-        return []
-
-    from resume_agent.rag.chroma_client import get_knowledge_collection
-
-    collection = get_knowledge_collection()
-    if collection.count() == 0:
-        return []
-
-    all_results: list[dict[str, Any]] = []
-    seen_texts: set[str] = set()
-
-    for query in queries:
-        try:
-            result = collection.query(
-                query_texts=[query], n_results=_SEARCH_TOP_K
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("检索 %s 失败: %s", query, exc)
-            continue
-
-        ids = result.get("ids", [[]])
-        documents = result.get("documents", [[]])
-        metadatas = result.get("metadatas", [[]])
-        distances = result.get("distances", [[]])
-
-        if not ids or not ids[0]:
-            continue
-
-        for idx in range(len(ids[0])):
-            doc = documents[0][idx] if idx < len(documents[0]) else ""
-            meta = metadatas[0][idx] if idx < len(metadatas[0]) else {}
-            distance = distances[0][idx] if idx < len(distances[0]) else 1.0
-            score = max(0.0, 1.0 - distance) if distance is not None else 0.0
-            source_file = (
-                meta.get("source_file", "") if isinstance(meta, dict) else ""
-            )
-
-            # 用 chunk_text 前 100 字做去重键
-            dedup_key = doc[:100] if doc else ""
-            if dedup_key in seen_texts:
-                continue
-            seen_texts.add(dedup_key)
-
-            all_results.append({
-                "chunk_text": doc[:300],  # 截断避免 prompt 过长
-                "source_file": source_file,
-                "score": round(score, 4),
-            })
-
-    # 按 score 降序，取 top N
-    all_results.sort(key=lambda x: x["score"], reverse=True)
-    return all_results[:_MAX_EVIDENCE_CHUNKS]
 
 
 def _format_evidence_for_prompt(evidence: list[dict[str, Any]]) -> str:
@@ -360,7 +300,7 @@ async def generate(req: GenerateRequest) -> dict[str, Any]:
 
     # 1. 检索知识库
     queries = _collect_search_queries(req.structured_jd)
-    evidence = _search_knowledge_base(queries)
+    evidence = search_knowledge(queries)
     sources_used = len(evidence)
 
     if sources_used == 0:
@@ -412,26 +352,6 @@ class SectionRegenerateRequest(BaseModel):
     gap_report: dict[str, Any] | None = None
 
 
-def _get_node_content(node_id: str) -> dict[str, Any] | None:
-    """获取节点 content_json。"""
-    from resume_agent.db.connection import get_connection
-
-    with get_connection() as conn:
-        row = conn.execute(
-            "SELECT content_json FROM resume_versions WHERE node_id = ?",
-            [node_id],
-        ).fetchone()
-    if not row:
-        return None
-    raw = row["content_json"]
-    if not raw:
-        return {}
-    try:
-        return json.loads(raw) if isinstance(raw, str) else raw
-    except (json.JSONDecodeError, TypeError):
-        return {}
-
-
 def _resolve_personal_info(node_id: str) -> dict[str, Any]:
     """从当前节点向上追溯父节点链，找到第一个非空 personal_info。
 
@@ -473,19 +393,6 @@ def _resolve_personal_info(node_id: str) -> dict[str, Any]:
             current = row["parent_id"] if row["parent_id"] else ""
 
     return {}
-
-
-def _save_node_content(node_id: str, content: dict[str, Any]) -> bool:
-    """保存节点 content_json。"""
-    from resume_agent.db.connection import get_connection
-
-    with get_connection() as conn:
-        content_str = json.dumps(content, ensure_ascii=False)
-        cursor = conn.execute(
-            "UPDATE resume_versions SET content_json = ? WHERE node_id = ?",
-            [content_str, node_id],
-        )
-    return cursor.rowcount > 0
 
 
 async def _extract_personal_info_from_knowledge() -> dict[str, Any]:
@@ -584,7 +491,7 @@ async def _generate_one_section(
         段落数据 dict，含 section/content/reflection/sources_used。
         如果知识库为空，返回空内容并标注。
     """
-    evidence = _search_knowledge_base(queries)
+    evidence = search_knowledge(queries)
     if not evidence:
         return {
             "section": section,
@@ -629,7 +536,7 @@ async def generate_full(req: FullGenerateRequest) -> dict[str, Any]:
     import asyncio
 
     # 获取节点数据
-    content = _get_node_content(req.node_id)
+    content = get_node_content(req.node_id)
     if content is None:
         return error("NODE_NOT_FOUND", f"节点 {req.node_id} 不存在")
 
@@ -680,16 +587,16 @@ async def generate_full(req: FullGenerateRequest) -> dict[str, Any]:
 
     # 个人信息：从父节点链追溯查找（US-14 修复）
     personal_info = _resolve_personal_info(req.node_id)
-    
+
     # 如果节点链上没找到，从知识库向量搜索提取
     if not personal_info:
         personal_info = await _extract_personal_info_from_knowledge()
-    
+
     if personal_info:
         content["personal_info"] = personal_info
 
     # 保存到节点（在 personal_info 赋值之后）
-    _save_node_content(req.node_id, content)
+    save_node_content(req.node_id, content)
 
     return success({
         "node_id": req.node_id,
@@ -711,7 +618,7 @@ async def regenerate_section(req: SectionRegenerateRequest) -> dict[str, Any]:
             f"不支持的段落类型: {req.section}，仅支持 {list(_FULL_SECTIONS)}",
         )
 
-    content = _get_node_content(req.node_id)
+    content = get_node_content(req.node_id)
     if content is None:
         return error("NODE_NOT_FOUND", f"节点 {req.node_id} 不存在")
 
@@ -737,7 +644,7 @@ async def regenerate_section(req: SectionRegenerateRequest) -> dict[str, Any]:
     else:
         content[req.section] = section_data.get(req.section, [])
 
-    _save_node_content(req.node_id, content)
+    save_node_content(req.node_id, content)
 
     return success({
         "node_id": req.node_id,

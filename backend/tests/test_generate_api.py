@@ -26,6 +26,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from resume_agent.db.init_db import init_database
+from resume_agent.services.knowledge_search import (
+    MAX_EVIDENCE_CHUNKS,
+    search_knowledge,
+)
 
 # === 辅助函数 ===
 
@@ -537,7 +541,6 @@ def test_llm_not_configured_writer_error(
 
 def test_search_dedup(monkeypatch: pytest.MonkeyPatch) -> None:
     """检索去重：同一切片不重复出现。"""
-    from resume_agent.api import generate as gen_module
     from resume_agent.rag import chroma_client
 
     same_doc = "这是相同的 Python 开发经历内容，包含详细的项目描述和技术细节。"
@@ -560,7 +563,7 @@ def test_search_dedup(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
     queries = ["Python", "Java", "Go"]
-    results = gen_module._search_knowledge_base(queries)
+    results = search_knowledge(queries)
 
     # 3 个查询返回同一切片，去重后应只有 1 个
     assert len(results) == 1
@@ -602,7 +605,6 @@ def test_search_dedup_integration(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_evidence_max_chunks(monkeypatch: pytest.MonkeyPatch) -> None:
     """evidence 数量不超过 _MAX_EVIDENCE_CHUNKS。"""
-    from resume_agent.api import generate as gen_module
     from resume_agent.rag import chroma_client
 
     class FakeCollection:
@@ -639,10 +641,10 @@ def test_evidence_max_chunks(monkeypatch: pytest.MonkeyPatch) -> None:
 
     # 5 个查询，每个返回 3 个唯一结果 = 15 个原始结果，cap 后应为 10
     queries = ["Python", "Java", "Go", "Rust", "C++"]
-    results = gen_module._search_knowledge_base(queries)
+    results = search_knowledge(queries)
 
-    assert len(results) == gen_module._MAX_EVIDENCE_CHUNKS
-    assert len(results) <= gen_module._MAX_EVIDENCE_CHUNKS
+    assert len(results) == MAX_EVIDENCE_CHUNKS
+    assert len(results) <= MAX_EVIDENCE_CHUNKS
 
     # 验证结果按 score 降序排列
     scores = [r["score"] for r in results]

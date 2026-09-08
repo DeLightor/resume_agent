@@ -16,17 +16,15 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import uuid
 from typing import Any
 
 from fastapi import APIRouter, File, UploadFile
-from typing import List
 
 from resume_agent.api.response import error, success
-from resume_agent.llm.client import LLMClient
 from resume_agent.parsers.mineru_client import MinerUClient, MinerUError
+from resume_agent.services.jd_extract import extract_jd_fields
 
 logger = logging.getLogger("resume_agent")
 
@@ -40,28 +38,6 @@ _ALLOWED_FILE_TYPES: tuple[str, ...] = (
 # 直接读取的格式（无需 MinerU OCR）
 _DIRECT_READ_TYPES: tuple[str, ...] = ("txt",)
 
-# 结构化提取 system prompt
-_SYSTEM_PROMPT = """你是 JD（职位描述）解析专家，擅长从职位描述文本中提取结构化信息。
-
-要求：
-1. 严格基于文本内容提取，禁止编造未在 JD 中出现的字段。
-2. 输入文本可能来自多张截图 / PDF / 纯文本的合并，可能包含重复内容。请去重后提取，确保各字段值不重复。
-3. 找不到的字段返回空字符串（字符串字段）或空数组（列表字段）。
-4. 输出必须是合法的 JSON 对象，字段固定为：
-   - job_title: string           # 职位名称
-   - company: string             # 公司名称
-   - tech_stack: [string]        # 技术栈（如 Python、React、K8s）
-   - hard_skills: [string]       # 硬技能（如模型训练、系统设计）
-   - soft_skills: [string]       # 软技能（如沟通、团队协作）
-   - bonus_items: [string]       # 加分项（如顶会论文、开源贡献）
-5. 不要输出任何 JSON 之外的解释性文字。"""
-
-_USER_PROMPT_TEMPLATE = """请解析以下 JD 文本，按规范输出 JSON（注意去重）：
-
----
-{raw_text}
----"""
-
 
 def _get_file_ext(filename: str | None) -> str | None:
     """从文件名提取小写扩展名（不含点）。"""
@@ -69,43 +45,9 @@ def _get_file_ext(filename: str | None) -> str | None:
         return None
     return filename.rsplit(".", 1)[-1].lower()
 
-
-def _parse_json_safely(text: str) -> dict[str, Any]:
-    """安全解析可能包含前后噪声的 JSON 文本。"""
-    cleaned = text.strip()
-    if cleaned.startswith("```"):
-        cleaned = cleaned.lstrip("`")
-        if cleaned.lower().startswith("json"):
-            cleaned = cleaned[4:]
-        cleaned = cleaned.strip()
-        if cleaned.endswith("```"):
-            cleaned = cleaned[:-3].strip()
-
-    try:
-        data = json.loads(cleaned)
-    except json.JSONDecodeError:
-        first = cleaned.find("{")
-        last = cleaned.rfind("}")
-        if first != -1 and last != -1 and last > first:
-            try:
-                data = json.loads(cleaned[first : last + 1])
-            except json.JSONDecodeError as exc:
-                raise RuntimeError(
-                    f"LLM 返回内容无法解析为 JSON: {exc}"
-                ) from exc
-        else:
-            raise RuntimeError("LLM 返回内容无法解析为 JSON") from None
-
-    if not isinstance(data, dict):
-        raise RuntimeError(
-            f"LLM 返回的 JSON 不是对象: {type(data).__name__}"
-        )
-    return data
-
-
 @router.post("/analyze")
 async def analyze_jd(
-    files: List[UploadFile] = File(...),
+    files: list[UploadFile] = File(...),
 ) -> dict[str, Any]:
     """分析 JD 文件（支持多文件）。
 
@@ -175,7 +117,7 @@ async def analyze_jd(
             logger.exception("MinerU 解析异常")
             return error("PARSE_FAILED", f"JD 文件解析异常: {exc}")
 
-        for idx, md_text in zip(mineru_indices, mineru_texts):
+        for idx, md_text in zip(mineru_indices, mineru_texts, strict=False):
             all_texts[idx] = md_text
 
     # 4. 合并文本
@@ -184,19 +126,14 @@ async def analyze_jd(
     if not merged_text.strip():
         return error("PARSE_FAILED", "所有文件解析结果为空")
 
-    # 5. 调用 LLM 结构化提取
-    llm = LLMClient()
-    if not llm.configured:
+    # 5. 调用 LLM 结构化提取（前置检查保留原有 LLM_NOT_CONFIGURED 语义）
+    from resume_agent.llm.client import LLMClient
+
+    if not LLMClient().configured:
         return error("LLM_NOT_CONFIGURED", "LLM 未配置，无法进行结构化提取")
 
-    user_prompt = _USER_PROMPT_TEMPLATE.format(raw_text=merged_text)
     try:
-        response_text = await llm.chat(
-            system_prompt=_SYSTEM_PROMPT,
-            user_content=user_prompt,
-            response_format_json=True,
-        )
-        structured = _parse_json_safely(response_text)
+        structured = await extract_jd_fields(merged_text)
     except RuntimeError as exc:
         logger.warning("LLM 结构化提取失败: %s", exc)
         return error("EXTRACT_FAILED", f"JD 结构化提取失败: {exc}")

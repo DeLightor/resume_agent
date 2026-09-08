@@ -25,7 +25,6 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from resume_agent.db.connection import get_connection
 from resume_agent.db.init_db import init_database
 
 # === 辅助函数 ===
@@ -128,8 +127,8 @@ def _mock_search_skill(
     monkeypatch: pytest.MonkeyPatch,
     score_map: dict[str, float],
 ) -> None:
-    """mock gap_report._search_skill 返回指定分数的检索结果。"""
-    from resume_agent.api import gap_report as gap_report_module
+    """mock gap_analyzer._search_skill 返回指定分数的检索结果。"""
+    from resume_agent.services import gap_analyzer as gap_analyzer_module
 
     def fake_search_skill(skill: str) -> list[dict[str, Any]]:
         score = score_map.get(skill, 0.0)
@@ -143,7 +142,7 @@ def _mock_search_skill(
             }
         ]
 
-    monkeypatch.setattr(gap_report_module, "_search_skill", fake_search_skill)
+    monkeypatch.setattr(gap_analyzer_module, "_search_skill", fake_search_skill)
 
 
 # === 空知识库测试 ===
@@ -438,7 +437,7 @@ def test_invalid_request_non_dict() -> None:
 
 def test_determine_status_thresholds() -> None:
     """测试 _determine_status 在阈值边界的判定。"""
-    from resume_agent.api.gap_report import _determine_status
+    from resume_agent.services.gap_analyzer import _determine_status
 
     # covered: score >= 0.6
     assert _determine_status(0.6) == "covered"
@@ -579,7 +578,7 @@ def test_overall_score_all_missing(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_collect_skills_dedup() -> None:
     """测试 _collect_skills 去重。"""
-    from resume_agent.api.gap_report import _collect_skills
+    from resume_agent.services.gap_analyzer import _collect_skills
 
     structured_jd = {
         "tech_stack": ["Python", "React", "Python"],  # Python 重复
@@ -600,7 +599,7 @@ def test_collect_skills_dedup() -> None:
 
 def test_collect_skills_ignores_non_list_items() -> None:
     """非列表类型的字段应被忽略。"""
-    from resume_agent.api.gap_report import _collect_skills
+    from resume_agent.services.gap_analyzer import _collect_skills
 
     structured_jd = {
         "tech_stack": "Python",  # 字符串而非列表
@@ -618,7 +617,7 @@ def test_collect_skills_ignores_non_list_items() -> None:
 
 def test_collect_skills_ignores_empty_and_non_string() -> None:
     """空字符串和非字符串元素应被忽略。"""
-    from resume_agent.api.gap_report import _collect_skills
+    from resume_agent.services.gap_analyzer import _collect_skills
 
     structured_jd = {
         "tech_stack": ["Python", "", 123, "React"],  # 空串和数字被忽略

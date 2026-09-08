@@ -70,5 +70,40 @@ CREATE TABLE IF NOT EXISTS upload_records (
     created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- ========================================
+-- 4. agent_sessions：Agent 会话（US-27 agent-runtime）
+-- ========================================
+CREATE TABLE IF NOT EXISTS agent_sessions (
+    id               TEXT PRIMARY KEY,          -- UUID v4
+    status           TEXT NOT NULL DEFAULT 'running'
+                     CHECK (status IN ('running', 'awaiting_user', 'done', 'failed')),
+    context_json     TEXT,                      -- JSON: {current_node_id, jd_summary, ...}
+    messages_json    TEXT NOT NULL DEFAULT '[]',-- JSON: OpenAI 协议消息数组（含 tool_calls / tool results）
+    pending_question TEXT,                      -- awaiting_user 时的待答问题
+
+    created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_sessions_status ON agent_sessions(status);
+
+-- ========================================
+-- 5. agent_traces：Agent 工具调用轨迹（US-27 agent-runtime）
+-- ========================================
+CREATE TABLE IF NOT EXISTS agent_traces (
+    id              TEXT PRIMARY KEY,           -- UUID v4
+    session_id      TEXT NOT NULL,
+    round           INTEGER NOT NULL,           -- 第几轮 LLM 调用
+    tool_name       TEXT NOT NULL,
+    input_json      TEXT,                       -- JSON: 工具入参
+    output_json     TEXT,                       -- JSON: 工具输出（截断至 4KB）
+
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+
+    FOREIGN KEY (session_id) REFERENCES agent_sessions(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_traces_session ON agent_traces(session_id);
+
 CREATE INDEX IF NOT EXISTS idx_upload_status ON upload_records(parse_status);
 CREATE INDEX IF NOT EXISTS idx_upload_type  ON upload_records(file_type);

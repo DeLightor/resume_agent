@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from openai import AsyncOpenAI
 
@@ -112,6 +113,40 @@ class LLMClient:
         content = response.choices[0].message.content
         return content if content is not None else ""
 
+    async def chat_raw(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+    ) -> Any:
+        """单轮 chat completion 调用，返回原始 assistant message。
+
+        供 Agent Runtime 逐轮驱动（US-27）：调用方自己持有 messages
+        历史与循环控制，本方法不做任何循环或消息管理。
+
+        Args:
+            messages: OpenAI 协议消息数组（含 tool_calls / tool 结果）。
+            tools: OpenAI 格式工具定义，None 时不传递。
+
+        Returns:
+            ``response.choices[0].message`` 原始对象（含 tool_calls 属性）。
+
+        Raises:
+            RuntimeError: ``api_key`` 为空时抛出 ``"LLM not configured"``。
+        """
+        if not self.api_key:
+            raise RuntimeError("LLM not configured")
+
+        client = self._build_client()
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+        }
+        if tools:
+            kwargs["tools"] = tools
+
+        response = await client.chat.completions.create(**kwargs)
+        return response.choices[0].message
+
     async def chat_with_tools(
         self,
         system_prompt: str,
@@ -152,7 +187,7 @@ class LLMClient:
             {"role": "user", "content": user_content},
         ]
 
-        for round_idx in range(max_tool_rounds):
+        for _round_idx in range(max_tool_rounds):
             kwargs: dict[str, Any] = {
                 "model": self.model,
                 "messages": messages,

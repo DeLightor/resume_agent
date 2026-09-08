@@ -610,41 +610,33 @@ def _install_mock_mineru_error(
 def _install_mock_llm(
     monkeypatch: pytest.MonkeyPatch, structured: dict[str, Any]
 ) -> None:
-    """mock LLMClient.chat 返回指定结构化字典的 JSON 字符串。"""
+    """mock extract_jd_fields 返回指定结构化字典。"""
     from resume_agent.api import jd as jd_module
+    from resume_agent.llm.client import LLMClient
 
-    async def fake_chat(
-        self: Any,
-        system_prompt: str,
-        user_content: str,
-        response_format_json: bool = False,
-    ) -> str:
-        return json.dumps(structured, ensure_ascii=False)
+    async def fake_extract(raw_text: str) -> dict[str, Any]:
+        return structured
 
     monkeypatch.setattr(
-        jd_module.LLMClient, "configured", property(lambda self: True)
+        LLMClient, "configured", property(lambda self: True)
     )
-    monkeypatch.setattr(jd_module.LLMClient, "chat", fake_chat)
+    monkeypatch.setattr(jd_module, "extract_jd_fields", fake_extract)
 
 
 def _install_mock_llm_raw(
     monkeypatch: pytest.MonkeyPatch, raw_response: str
 ) -> None:
-    """mock LLMClient.chat 返回原始字符串（用于测试非法 JSON 场景）。"""
+    """mock extract_jd_fields 抛解析错误（用于测试非法 JSON 场景）。"""
     from resume_agent.api import jd as jd_module
+    from resume_agent.llm.client import LLMClient
 
-    async def fake_chat(
-        self: Any,
-        system_prompt: str,
-        user_content: str,
-        response_format_json: bool = False,
-    ) -> str:
-        return raw_response
+    async def fake_extract(raw_text: str) -> dict[str, Any]:
+        raise RuntimeError(f"LLM 返回内容无法解析为 JSON: {raw_response}")
 
     monkeypatch.setattr(
-        jd_module.LLMClient, "configured", property(lambda self: True)
+        LLMClient, "configured", property(lambda self: True)
     )
-    monkeypatch.setattr(jd_module.LLMClient, "chat", fake_chat)
+    monkeypatch.setattr(jd_module, "extract_jd_fields", fake_extract)
 
 
 def test_analyze_success_full_flow(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -949,12 +941,12 @@ def test_analyze_mineru_unexpected_error(
 def test_analyze_llm_not_configured(monkeypatch: pytest.MonkeyPatch) -> None:
     """LLM 未配置时应返回 LLM_NOT_CONFIGURED。"""
     _init_jd_env()
-    from resume_agent.api import jd as jd_module
+    from resume_agent.llm.client import LLMClient
     from resume_agent.main import app
 
     _install_mock_mineru(monkeypatch, "# JD text")
     monkeypatch.setattr(
-        jd_module.LLMClient, "configured", property(lambda self: False)
+        LLMClient, "configured", property(lambda self: False)
     )
 
     client = TestClient(app)
@@ -999,18 +991,15 @@ def test_analyze_llm_raises_exception(
 
     _install_mock_mineru(monkeypatch, "# JD text")
 
-    async def fake_chat(
-        self: Any,
-        system_prompt: str,
-        user_content: str,
-        response_format_json: bool = False,
-    ) -> str:
+    from resume_agent.llm.client import LLMClient
+
+    async def fake_extract(raw_text: str) -> dict[str, Any]:
         raise RuntimeError("LLM 调用失败")
 
     monkeypatch.setattr(
-        jd_module.LLMClient, "configured", property(lambda self: True)
+        LLMClient, "configured", property(lambda self: True)
     )
-    monkeypatch.setattr(jd_module.LLMClient, "chat", fake_chat)
+    monkeypatch.setattr(jd_module, "extract_jd_fields", fake_extract)
 
     client = TestClient(app)
     response = client.post(
@@ -1078,18 +1067,15 @@ def test_analyze_llm_returns_markdown_wrapped_json(
         "bonus_items": [],
     }
 
-    async def fake_chat(
-        self: Any,
-        system_prompt: str,
-        user_content: str,
-        response_format_json: bool = False,
-    ) -> str:
-        return f"```json\n{json.dumps(structured, ensure_ascii=False)}\n```"
+    from resume_agent.llm.client import LLMClient
+
+    async def fake_extract(raw_text: str) -> dict[str, Any]:
+        return structured
 
     monkeypatch.setattr(
-        jd_module.LLMClient, "configured", property(lambda self: True)
+        LLMClient, "configured", property(lambda self: True)
     )
-    monkeypatch.setattr(jd_module.LLMClient, "chat", fake_chat)
+    monkeypatch.setattr(jd_module, "extract_jd_fields", fake_extract)
 
     client = TestClient(app)
     response = client.post(
