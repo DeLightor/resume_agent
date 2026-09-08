@@ -129,7 +129,7 @@ FILES_ROOT=~/.resume-agent/files
 | 前端 | React 18 + Vite + TypeScript + Tailwind CSS v4 + React Flow v12 |
 | 后端 | Python 3.10+ + FastAPI + uvicorn |
 | 数据库 | SQLite（元数据）+ Chroma（向量库，嵌入式，all-MiniLM-L6-v2） |
-| LLM | DeepSeek / OpenAI 兼容协议（结构化提取、反思审核、简历生成、导师建议） |
+| LLM | DeepSeek / OpenAI 兼容协议（Agent function calling、结构化提取、反思审核、简历生成、导师建议） |
 | OCR | MinerU 云端 API（JD 截图解析，支持 PDF/图片/DOCX） |
 | Web 搜索 | Tavily API（AI 导师学习资源搜索，真实 URL） |
 | PDF | reportlab（ATS 友好，文本可选可解析，CJK 字体支持，多模板） |
@@ -193,16 +193,18 @@ FILES_ROOT=~/.resume-agent/files
 resume-agent/
 ├── backend/              # Python 后端
 │   ├── src/resume_agent/
-│   │   ├── api/          # FastAPI 路由（tree/knowledge/jd/gap_report/generate/export/diff/suggest/tutor/templates/completeness/upstream）
+│   │   ├── api/          # FastAPI 路由（tree/knowledge/jd/gap_report/generate/export/diff/suggest/tutor/templates/completeness/upstream/agent）
+│   │   ├── agents/       # Agent Runtime（工具注册表、多轮循环、会话存储）
+│   │   ├── services/     # 业务逻辑（版本树构建、知识库检索、JD/Gap 分析、节点内容）
 │   │   ├── db/           # SQLite + 建表脚本
 │   │   ├── rag/          # Chroma 向量库 + 文本分块
 │   │   ├── parsers/      # MinerU 文档解析客户端
 │   │   ├── llm/          # 统一 LLM 客户端（OpenAI/DeepSeek，支持 tool use）
-│   │   ├── tools/        # 外部工具（Tavily Web 搜索）
+│   │   ├── tools/        # Agent 工具封装 + 外部工具（Tavily Web 搜索）
 │   │   ├── export/       # PDF 生成（reportlab，多模板）
 │   │   ├── config.py     # 环境变量配置
 │   │   └── main.py       # FastAPI 入口
-│   └── tests/            # pytest 测试（75+ tests）
+│   └── tests/            # pytest 测试（330+ tests）
 ├── frontend/             # React 前端
 │   ├── src/
 │   │   ├── components/   # 组件（layout/tree/knowledge/jd/gap/generate/diff/tutor/template）
