@@ -53,7 +53,7 @@ class TreeBuilder:
         """
         with get_connection(self.db_path) as conn:
             self._ensure_master(conn)
-            branch_node = self._find_or_create_branch(conn, resume.primary_direction)
+            branch_node, existed = self._find_or_create_branch(conn, resume.primary_direction)
 
             # 构造 content_json：结构化简历 + personal_info
             content = resume.model_dump()
@@ -71,7 +71,7 @@ class TreeBuilder:
             )
 
             node = self._fetch_node(conn, branch_node["node_id"])
-            return {"node": node, "deduplicated": False}
+            return {"node": node, "deduplicated": existed}
 
     def _map_to_personal_info(self, resume: StructuredResume) -> dict[str, Any]:
         """将 StructuredResume 的 basic + education 映射为 personal_info 格式。
@@ -131,14 +131,14 @@ class TreeBuilder:
 
     def _find_or_create_branch(
         self, conn: Any, direction: str
-    ) -> dict[str, Any]:
-        """查找或创建 branch 节点，返回节点字典。"""
+    ) -> tuple[dict[str, Any], bool]:
+        """查找或创建 branch 节点，返回 ``(节点字典, 是否已存在)``。"""
         row: dict[str, Any] | None = conn.execute(
             "SELECT * FROM resume_versions WHERE node_type = ? AND direction = ?",
             ("branch", direction),
         ).fetchone()
         if row is not None:
-            return row
+            return row, True
 
         title = _DIRECTION_TITLES.get(direction, f"{direction}方向")
         node_id = f"branch-{direction}"
@@ -159,7 +159,7 @@ class TreeBuilder:
             "direction": direction,
             "content_json": None,
             "company": None,
-        }
+        }, False
 
     def _fetch_node(self, conn: Any, node_id: str) -> dict[str, Any]:
         """查询单个节点。"""

@@ -18,7 +18,6 @@ from fastapi import APIRouter, UploadFile
 from pydantic import BaseModel
 
 from resume_agent.api.response import error, success
-from resume_agent.config import settings
 from resume_agent.db.connection import get_connection
 from resume_agent.llm.client import LLMClient
 from resume_agent.parsers.docx_parser import extract_text_from_docx
@@ -110,6 +109,10 @@ async def upload_resume(file: UploadFile) -> dict[str, Any]:
         )
 
     # 保存文件
+    # 延迟导入 settings：测试期 conftest 会重置 config 模块的 settings 单例，
+    # 此处每次调用都读取最新引用，避免持有过期实例（对齐 connection.py 惯例）。
+    from resume_agent.config import settings
+
     upload_id = str(uuid.uuid4())
     resumes_dir = settings.files_root / "resumes"
     resumes_dir.mkdir(parents=True, exist_ok=True)
@@ -178,6 +181,9 @@ async def parse_resume(req: ParseRequest) -> dict[str, Any]:
 
     # 3. 标记为 parsing 中
     _update_parse_status(req.upload_id, "parsing")
+
+    # 延迟导入 settings：同 upload_resume，避免持有过期实例
+    from resume_agent.config import settings
 
     file_path = settings.files_root / record["file_path"]
     try:

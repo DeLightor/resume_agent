@@ -159,10 +159,18 @@ def test_upload_rejects_invalid_file_type() -> None:
 # === parse 端点测试 ===
 
 
-def test_parse_returns_error_when_llm_not_configured(tmp_path: Path) -> None:
+def test_parse_returns_error_when_llm_not_configured(
+    tmp_path: Path, monkeypatch
+) -> None:
     """LLM 未配置时 parse 端点返回错误提示。"""
     _init_db()
+    from resume_agent.api import resumes as resumes_module
     from resume_agent.main import app
+
+    # 强制 LLM 未配置（本机 backend/.env 可能提供真实 key，需隔离）
+    monkeypatch.setattr(
+        resumes_module.LLMClient, "configured", property(lambda self: False)
+    )
 
     # 先上传文件
     pdf_path = tmp_path / "r.pdf"
@@ -175,7 +183,7 @@ def test_parse_returns_error_when_llm_not_configured(tmp_path: Path) -> None:
         )
     upload_id = upload_resp.json()["data"]["upload_id"]
 
-    # 调用 parse（settings.llm_api_key 默认为空）
+    # 调用 parse
     response = client.post("/api/resumes/parse", json={"upload_id": upload_id})
 
     assert response.status_code == 200
@@ -227,8 +235,10 @@ def test_parse_success_full_flow(tmp_path: Path, monkeypatch) -> None:
     assert data["structured_resume"]["basic"]["name"] == "张三"
     assert data["structured_resume"]["primary_direction"] == "安全"
     assert data["deduplicated"] is False
-    assert data["tree_node"]["node_type"] == "company"
-    assert data["tree_node"]["company"] == "Tencent"
+    # US-12：只创建方向（branch）节点，不再创建 company 节点
+    assert data["tree_node"]["node_type"] == "branch"
+    assert data["tree_node"]["direction"] == "安全"
+    assert data["tree_node"]["node_id"] == "branch-安全"
 
     # 验证 DB 状态更新为 success
     with get_connection() as conn:
@@ -237,12 +247,14 @@ def test_parse_success_full_flow(tmp_path: Path, monkeypatch) -> None:
         ).fetchone()
     assert record["parse_status"] == "success"
 
-    # 验证版本树节点已创建
+    # 验证版本树 branch 节点已创建并写入简历内容
     with get_connection() as conn:
         nodes = conn.execute(
-            "SELECT * FROM resume_versions WHERE node_type = 'company'"
+            "SELECT * FROM resume_versions WHERE node_type = 'branch'"
         ).fetchall()
     assert len(nodes) == 1
+    content = json.loads(nodes[0]["content_json"])
+    assert content["basic"]["name"] == "张三"
 
 
 def test_parse_deduplicates_on_second_call(tmp_path: Path, monkeypatch) -> None:
@@ -275,10 +287,10 @@ def test_parse_deduplicates_on_second_call(tmp_path: Path, monkeypatch) -> None:
     resp2 = client.post("/api/resumes/parse", json={"upload_id": uid2})
 
     assert resp2.json()["data"]["deduplicated"] is True
-    # 版本树只应有 1 个 company 节点
+    # 版本树只应有 1 个 branch 节点（同方向去重）
     with get_connection() as conn:
         nodes = conn.execute(
-            "SELECT * FROM resume_versions WHERE node_type = 'company'"
+            "SELECT * FROM resume_versions WHERE node_type = 'branch'"
         ).fetchall()
     assert len(nodes) == 1
 

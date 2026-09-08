@@ -16,7 +16,8 @@ def test_get_templates_returns_list() -> None:
     assert body["ok"] is True
     templates = body["data"]
     assert isinstance(templates, list)
-    assert len(templates) == 3
+    # 内置模板已从 3 个扩展（modern/classic/tech + academic 等），下限 3
+    assert len(templates) >= 3
 
     # 验证每个模板字段齐全
     for tpl in templates:
