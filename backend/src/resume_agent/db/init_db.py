@@ -16,7 +16,12 @@ from resume_agent.config import settings
 from resume_agent.db.connection import get_connection
 
 # 表名集合，供健康检查与测试使用
-TABLES: tuple[str, ...] = ("resume_versions", "knowledge_chunks", "upload_records")
+TABLES: tuple[str, ...] = (
+    "resume_versions",
+    "knowledge_chunks",
+    "upload_records",
+    "parse_tasks",
+)
 
 
 def _load_schema_sql() -> str:
@@ -45,6 +50,7 @@ def init_database(db_path: Path | str | None = None) -> None:
     with get_connection(path) as conn:
         conn.executescript(schema_sql)
         _migrate_upstream_columns(conn)
+        _migrate_upload_direction(conn)
         _migrate_agent_session_columns(conn)
         _seed_master_node(conn)
 
@@ -63,6 +69,13 @@ def _migrate_upstream_columns(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE resume_versions ADD COLUMN {col_def}")
         except sqlite3.OperationalError:
             pass  # 列已存在
+
+
+def _migrate_upload_direction(conn: sqlite3.Connection) -> None:
+    try:
+        conn.execute("ALTER TABLE upload_records ADD COLUMN direction TEXT")
+    except sqlite3.OperationalError:
+        pass
 
 
 def _migrate_agent_session_columns(conn: sqlite3.Connection) -> None:

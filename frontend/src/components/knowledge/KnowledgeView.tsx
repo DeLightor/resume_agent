@@ -8,8 +8,11 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   deleteKnowledgeDocument,
   getKnowledgeDocuments,
+  getResumeList,
   searchKnowledge,
+  deleteResume,
 } from '@/lib/api';
+import type { ResumeListItem } from '@/types/resume';
 import type {
   KnowledgeDocument,
   KnowledgeParseStatus,
@@ -87,6 +90,7 @@ export default function KnowledgeView({
   onKnowledgeRefresh,
 }: KnowledgeViewProps) {
   const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
+  const [resumes, setResumes] = useState<ResumeListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -104,9 +108,10 @@ export default function KnowledgeView({
   const fetchDocuments = useCallback(() => {
     setLoading(true);
     setError(null);
-    getKnowledgeDocuments()
-      .then((data) => {
+    Promise.all([getKnowledgeDocuments(), getResumeList()])
+      .then(([data, resumeData]) => {
         setDocuments(data);
+        setResumes(resumeData.filter((item) => item.parse_status === 'success'));
         setLoading(false);
       })
       .catch((err: unknown) => {
@@ -217,6 +222,28 @@ export default function KnowledgeView({
             {searching ? '检索中...' : '检索'}
           </button>
         </div>
+      </div>
+
+      <div className="mt-6">
+        <div className="mb-3 text-sm font-semibold text-text-primary">
+          已确认的简历
+          <span className="ml-2 text-xs font-normal text-text-tertiary">· 共 {resumes.length} 份</span>
+        </div>
+        {resumes.length === 0 ? (
+          <div className="rounded-md border border-dashed border-border-default p-4 text-sm text-text-muted">暂无已确认简历</div>
+        ) : (
+          <div className="flex flex-col gap-1">
+            {resumes.map((resume) => (
+              <div key={resume.id} className="flex items-center gap-3 rounded-md border border-border-subtle bg-bg-secondary px-3 py-2.5">
+                <span className="min-w-[36px] rounded bg-bg-tertiary px-1.5 py-0.5 text-center font-mono text-[10px] text-text-secondary">简历</span>
+                <span className="min-w-0 flex-1 truncate text-sm text-text-primary" title={resume.file_name}>{resume.file_name}</span>
+                <span className="text-xs text-brand-primary">{resume.direction || '未指定方向'}</span>
+                <span className="hidden text-xs text-text-muted sm:block">{formatDate(resume.created_at)}</span>
+                <button type="button" className="min-h-8 px-2 text-xs text-error" onClick={async () => { if (window.confirm('删除这份已入库简历？')) { await deleteResume(resume.id); fetchDocuments(); onKnowledgeRefresh?.(); } }}>删除</button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* 主体内容区（可滚动） */}

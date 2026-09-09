@@ -65,13 +65,37 @@ CREATE TABLE IF NOT EXISTS upload_records (
     -- 解析状态
     parse_status    TEXT NOT NULL DEFAULT ('pending')
                     CHECK (parse_status IN ('pending', 'parsing', 'success', 'failed', 'needs_review')),
+    direction       TEXT,
 
     -- 时间戳
     created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- ========================================
--- 4. agent_sessions：Agent 会话（US-27 agent-runtime）
+-- 4. parse_tasks：两阶段解析任务（US-31 parse-confirm-flow）
+-- ========================================
+CREATE TABLE IF NOT EXISTS parse_tasks (
+    id              TEXT PRIMARY KEY,           -- 任务 ID（UUID v4）
+    upload_id       TEXT NOT NULL,              -- 关联 upload_records.id
+    status          TEXT NOT NULL DEFAULT 'extracting'
+                    CHECK (status IN ('extracting', 'awaiting_confirm', 'confirmed', 'failed')),
+    raw_text        TEXT,                       -- 提取的简历原文（确认后才写知识库）
+    parser_used     TEXT,                       -- 文件解析器：mineru / local
+    degraded        INTEGER NOT NULL DEFAULT 0, -- MinerU 降级到本地解析器标记
+    result_json     TEXT,                       -- JSON: {structured_resume, confidence}
+    knowledge_personal_json TEXT,               -- JSON: 知识库个人信息（供覆盖选择，不静默覆盖）
+    error           TEXT,                       -- 失败原因
+
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+
+    FOREIGN KEY (upload_id) REFERENCES upload_records(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_parse_tasks_upload ON parse_tasks(upload_id);
+
+-- ========================================
+-- 5. agent_sessions：Agent 会话（US-27 agent-runtime）
 -- ========================================
 CREATE TABLE IF NOT EXISTS agent_sessions (
     id               TEXT PRIMARY KEY,          -- UUID v4
@@ -89,7 +113,7 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
 CREATE INDEX IF NOT EXISTS idx_agent_sessions_status ON agent_sessions(status);
 
 -- ========================================
--- 5. agent_traces：Agent 工具调用轨迹（US-27 agent-runtime）
+-- 6. agent_traces：Agent 工具调用轨迹（US-27 agent-runtime）
 -- ========================================
 CREATE TABLE IF NOT EXISTS agent_traces (
     id              TEXT PRIMARY KEY,           -- UUID v4

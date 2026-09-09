@@ -176,7 +176,7 @@ export default function LeftPanel({
       <div className="px-4 py-4 flex flex-col gap-3">
         <UploadZone
           title="拖入旧简历 (PDF/Word)"
-          hint="自动解析并创建初始版本"
+          hint="解析后核对确认，再创建初始版本"
           onFileUploaded={() => onTreeRefresh?.()}
         />
         <UploadZone

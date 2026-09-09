@@ -9,7 +9,11 @@ import type {
   UpdateNodeRequest,
 } from '@/types/tree';
 import type {
+  ConfirmParseRequest,
   ParseResponse,
+  ParseStartResponse,
+  ParseTaskDetail,
+  ParseTaskEvent,
   ResumeListItem,
   UploadResponse,
 } from '@/types/resume';
@@ -112,11 +116,91 @@ export async function uploadResume(file: File): Promise<UploadResponse> {
 }
 
 /**
- * 触发简历解析。
- * 后端：提取文本 → LLM 结构化 → 生成/更新版本树节点。
+ * 触发简历解析（US-31 两阶段第一步）：启动异步提取任务，返回 task_id。
+ * 进度用 streamParseTaskEvents 订阅，结果用 getParseTask 拉取，
+ * 用户确认后 confirmParse 入库。
  */
-export async function parseResume(uploadId: string): Promise<ParseResponse> {
-  return api.post<ParseResponse>('/resumes/parse', { upload_id: uploadId });
+export async function startParseResume(uploadId: string): Promise<ParseStartResponse> {
+  return api.post<ParseStartResponse>('/resumes/parse', { upload_id: uploadId });
+}
+
+/**
+ * 查询解析任务详情（轮询兜底；SSE 不可用时或 done 事件后拉取结果）。
+ */
+export async function getParseTask(taskId: string): Promise<ParseTaskDetail> {
+  return api.get<ParseTaskDetail>(`/resumes/parse/tasks/${taskId}`);
+}
+
+export async function cancelParse(taskId: string): Promise<void> {
+  await api.del(`/resumes/parse/tasks/${encodeURIComponent(taskId)}`);
+}
+
+/**
+ * 确认解析结果并入库（US-31 两阶段第二步）：
+ * 用户审阅/修正后的结构化简历 + 是否用知识库个人信息覆盖。
+ * 返回与旧同步 parse 相同形状的数据（tree_node 等）。
+ */
+export async function confirmParse(
+  taskId: string,
+  body: ConfirmParseRequest,
+): Promise<ParseResponse> {
+  return api.post<ParseResponse>(`/resumes/parse/tasks/${taskId}/confirm`, body);
+}
+
+/** streamParseTaskEvents 参数 */
+export interface StreamParseTaskOptions {
+  /** 每条事件的回调 */
+  onEvent: (event: ParseTaskEvent) => void;
+  /** 中断信号（组件卸载） */
+  signal?: AbortSignal;
+}
+
+/**
+ * SSE 订阅解析任务进度：GET /resumes/parse/tasks/{id}/events。
+ *
+ * 复用 agent SSE 的 fetch + ReadableStream 手写解析（event/data 双行帧）。
+ * 流结束（done/error 后服务端关闭）时 resolve。
+ */
+export async function streamParseTaskEvents(
+  taskId: string,
+  options: StreamParseTaskOptions,
+): Promise<void> {
+  const res = await fetch(
+    `${BASE_URL}/resumes/parse/tasks/${taskId}/events`,
+    { signal: options.signal },
+  );
+
+  if (!res.ok || !res.body) {
+    throw new Error(`HTTP ${res.status}`);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    let sep: number;
+    while ((sep = buffer.indexOf('\n\n')) !== -1) {
+      const block = buffer.slice(0, sep);
+      buffer = buffer.slice(sep + 2);
+
+      let dataJson = '';
+      for (const line of block.split('\n')) {
+        if (line.startsWith('data: ')) dataJson = line.slice(6);
+      }
+      if (!dataJson) continue;
+
+      try {
+        options.onEvent(JSON.parse(dataJson) as ParseTaskEvent);
+      } catch {
+        // 单帧解析失败不中断流
+      }
+    }
+  }
 }
 
 /**
@@ -131,6 +215,10 @@ export async function getTree(): Promise<TreeData> {
  */
 export async function getResumeList(): Promise<ResumeListItem[]> {
   return api.get<ResumeListItem[]>('/resumes/list');
+}
+
+export async function deleteResume(uploadId: string): Promise<void> {
+  await api.del(`/resumes/uploads/${encodeURIComponent(uploadId)}`);
 }
 
 // ===== 版本树节点管理 API（US-2）=====
