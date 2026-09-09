@@ -23,6 +23,9 @@ node_modules/
 .vite/
 *.tsbuildinfo
 next-env.d.ts
+# 运行时生成（pnpm approve-builds / 启动台），正主为 vite.config.ts
+frontend/pnpm-workspace.yaml
+frontend/vite.config.js
 
 # === Environment & Secrets ===
 .env
