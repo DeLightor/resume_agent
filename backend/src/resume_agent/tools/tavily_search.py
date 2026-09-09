@@ -98,6 +98,7 @@ def search_skill_resources(
         return []
 
     from tavily import TavilyClient
+
     from resume_agent.config import settings
 
     client = TavilyClient(api_key=settings.tavily_api_key)
@@ -158,6 +159,7 @@ def search_web(query: str, max_results: int = 5) -> list[dict[str, str]]:
         return []
 
     from tavily import TavilyClient
+
     from resume_agent.config import settings
 
     client = TavilyClient(api_key=settings.tavily_api_key)

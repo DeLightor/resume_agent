@@ -64,18 +64,13 @@ def _migrate_upstream_columns(conn: sqlite3.Connection) -> None:
         "has_upstream_update INTEGER DEFAULT 0",
         "upstream_changes TEXT",
     ]:
-        col_name = col_def.split()[0]
-        try:
+        with contextlib.suppress(sqlite3.OperationalError):  # 列已存在
             conn.execute(f"ALTER TABLE resume_versions ADD COLUMN {col_def}")
-        except sqlite3.OperationalError:
-            pass  # 列已存在
 
 
 def _migrate_upload_direction(conn: sqlite3.Connection) -> None:
-    try:
+    with contextlib.suppress(sqlite3.OperationalError):  # 列已存在
         conn.execute("ALTER TABLE upload_records ADD COLUMN direction TEXT")
-    except sqlite3.OperationalError:
-        pass
 
 
 def _migrate_agent_session_columns(conn: sqlite3.Connection) -> None:

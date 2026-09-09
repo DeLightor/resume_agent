@@ -109,7 +109,7 @@ def _row_to_node(row: dict[str, Any]) -> dict[str, Any]:
         "company": row["company"],
         "direction": row["direction"],
         "content_json": content,
-        "has_upstream_update": bool(row["has_upstream_update"]) if "has_upstream_update" in row.keys() else False,
+        "has_upstream_update": bool(row["has_upstream_update"]) if "has_upstream_update" in row else False,
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }

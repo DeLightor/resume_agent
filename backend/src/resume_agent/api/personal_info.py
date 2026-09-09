@@ -70,9 +70,9 @@ class PersonalInfo(BaseModel):
 
 def _get_node_content(node_id: str) -> dict[str, Any] | None:
     """获取节点 content_json，不存在返回 None。"""
-    from resume_agent.db.connection import get_connection
-
     import json
+
+    from resume_agent.db.connection import get_connection
 
     with get_connection() as conn:
         row = conn.execute(
@@ -92,9 +92,9 @@ def _get_node_content(node_id: str) -> dict[str, Any] | None:
 
 def _save_node_content(node_id: str, content: dict[str, Any]) -> bool:
     """保存节点 content_json，成功返回 True。"""
-    from resume_agent.db.connection import get_connection
-
     import json
+
+    from resume_agent.db.connection import get_connection
 
     with get_connection() as conn:
         content_str = json.dumps(content, ensure_ascii=False)

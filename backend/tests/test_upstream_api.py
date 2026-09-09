@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 
 from fastapi.testclient import TestClient
@@ -10,8 +9,8 @@ from fastapi.testclient import TestClient
 
 def _init_db() -> None:
     """每次测试前清理并重新初始化数据库。"""
-    from resume_agent.db.init_db import init_database
     from resume_agent.config import settings
+    from resume_agent.db.init_db import init_database
 
     db_path = settings.sqlite_path
     if os.path.exists(db_path):

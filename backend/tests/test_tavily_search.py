@@ -8,8 +8,8 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 from resume_agent.tools.tavily_search import (
-    search_skill_resources,
     search_batch_skills,
+    search_skill_resources,
 )
 
 

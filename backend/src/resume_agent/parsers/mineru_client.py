@@ -120,7 +120,7 @@ class MinerUClient:
         filenames = [fp.name for fp in file_paths]
         batch_id, upload_urls = self._request_upload_urls_batch(filenames)
 
-        for url, fp in zip(upload_urls, file_paths):
+        for url, fp in zip(upload_urls, file_paths, strict=False):
             self._upload_file(url, fp)
 
         results = self._poll_batch_result(batch_id)

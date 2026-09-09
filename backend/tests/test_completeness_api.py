@@ -6,8 +6,8 @@ from fastapi.testclient import TestClient
 
 
 def _init_db() -> None:
-    from resume_agent.db.init_db import init_database
     from resume_agent.config import settings
+    from resume_agent.db.init_db import init_database
 
     init_database(settings.sqlite_path)
 
