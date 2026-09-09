@@ -43,4 +43,4 @@
   重写通过 → 确认卡片附审查意见；打回耗尽路径（3 次审查 2 打回后放行，
   write_confirm 如实携带 passed=false + issues）；「确认写入」后节点
   内容真实持久化
-- [ ] 4.4 HJ 手工验收 + OpenSpec 归档合并
+- [x] 4.4 HJ 手工验收 + OpenSpec 归档合并
