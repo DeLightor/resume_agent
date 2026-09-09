@@ -1,14 +1,55 @@
 """AI 导师学习建议 API 测试：POST /api/tutor/suggest。
 
 用 FastAPI TestClient + 临时 DB（通过 conftest 的 _isolated_env fixture 隔离）。
-LLM 未配置时走模板化兜底路径，测试不依赖真实 LLM API。
+Tavily 与 LLM 全部 mock，不发真实外部请求（预存失败根因：测试曾真实调用
+Tavily，配额超限返回空 → resources 断言漂移）。
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
+
+# mock Tavily 搜索返回的假资源（覆盖 LLM 整合路径的用例使用）
+_FAKE_SEARCH_RESOURCES: list[dict[str, str]] = [
+    {
+        "type": "document",
+        "title": "Kubernetes 官方文档",
+        "url": "https://kubernetes.io/docs/",
+        "description": "官方教程",
+    },
+]
+
+
+@pytest.fixture(autouse=True)
+def _mock_tavily(monkeypatch: pytest.MonkeyPatch) -> None:
+    """屏蔽真实 Tavily 调用（防配额消耗与外部状态导致的测试漂移）。"""
+    monkeypatch.setattr(
+        "resume_agent.tools.tavily_search.search_skill_resources",
+        lambda skill: list(_FAKE_SEARCH_RESOURCES),
+    )
+
+
+def _mock_llm(monkeypatch: pytest.MonkeyPatch, response: str | None) -> None:
+    """mock LLMClient：configured + chat 固定返回（None 表示未配置）。"""
+    from resume_agent.llm.client import LLMClient
+
+    if response is None:
+        monkeypatch.setattr(
+            LLMClient, "configured", property(lambda self: False)
+        )
+        return
+
+    monkeypatch.setattr(
+        LLMClient, "configured", property(lambda self: True)
+    )
+
+    async def fake_chat(self: Any, **kwargs: Any) -> str:
+        return response
+
+    monkeypatch.setattr(LLMClient, "chat", fake_chat)
 
 
 def _tutor(
@@ -21,8 +62,31 @@ def _tutor(
 # === 测试用例 ===
 
 
-def test_missing_skills_returned() -> None:
-    """missing 状态的技能应该被包含在建议中。"""
+def test_missing_skills_returned(monkeypatch: pytest.MonkeyPatch) -> None:
+    """missing 状态的技能应该被包含在建议中（LLM 整合路径）。"""
+    import json
+
+    _mock_llm(monkeypatch, json.dumps({
+        "learning_path": {
+            "concept": "理解核心概念",
+            "practice": "动手练习",
+            "validation": "项目验证",
+        },
+        "resources": [
+            {
+                "type": "document",
+                "title": "K8s 文档",
+                "url": "https://kubernetes.io/docs/",
+                "description": "官方文档",
+            },
+            {
+                "type": "course",
+                "title": "K8s 课程",
+                "url": "https://example.com/course",
+                "description": "入门课程",
+            },
+        ],
+    }, ensure_ascii=False))
     from resume_agent.main import app
 
     items = [
@@ -115,8 +179,18 @@ def test_all_covered_returns_empty() -> None:
     assert body["data"]["suggestions"] == []
 
 
-def test_llm_not_configured_fallback() -> None:
-    """LLM 未配置时返回模板化建议（不报错）。"""
+def test_llm_not_configured_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    """LLM 未配置 + Tavily 空结果时返回模板化建议（不报错）。
+
+    显式 patch LLMClient.configured（backend/.env 有真实 key，
+    不 patch 会走真实 LLM 路径——本测试此前的漂移根因之一）。
+    """
+    _mock_llm(monkeypatch, None)
+    # 覆盖 autouse mock：Tavily 也拿不到结果（未配置/配额超限）
+    monkeypatch.setattr(
+        "resume_agent.tools.tavily_search.search_skill_resources",
+        lambda skill: [],
+    )
     from resume_agent.main import app
 
     items = [

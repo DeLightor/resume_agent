@@ -82,6 +82,36 @@ def _filter_skills(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return result
 
 
+def _template_resources(skill: str) -> list[dict[str, str]]:
+    """静态资源兜底：Tavily 搜索为空（未配置/配额超限/失败）时仍给出可用入口。"""
+    return [
+        {
+            "type": "document",
+            "title": f"{skill} 官方文档",
+            "url": f"https://www.google.com/search?q={skill}+official+documentation",
+            "description": f"搜索 {skill} 官方文档",
+        },
+        {
+            "type": "course",
+            "title": f"{skill} 系统课程",
+            "url": f"https://www.coursera.org/search?query={skill}",
+            "description": f"Coursera 搜索 {skill} 相关课程",
+        },
+        {
+            "type": "project",
+            "title": f"{skill} 开源项目",
+            "url": f"https://github.com/search?q={skill}&type=repositories",
+            "description": f"GitHub 搜索 {skill} 相关项目",
+        },
+        {
+            "type": "interview",
+            "title": f"{skill} 面试题汇总",
+            "url": f"https://www.google.com/search?q={skill}+interview+questions",
+            "description": f"搜索 {skill} 面试题",
+        },
+    ]
+
+
 def _template_suggestion(skill: str, status: str) -> dict[str, Any]:
     """生成模板化建议（LLM 未配置或解析失败时兜底）。"""
     return {
@@ -92,32 +122,7 @@ def _template_suggestion(skill: str, status: str) -> dict[str, Any]:
             "practice": f"通过实际项目练习 {skill} 的使用",
             "validation": f"通过面试题或项目验收 {skill} 掌握程度",
         },
-        "resources": [
-            {
-                "type": "document",
-                "title": f"{skill} 官方文档",
-                "url": f"https://www.google.com/search?q={skill}+official+documentation",
-                "description": f"搜索 {skill} 官方文档",
-            },
-            {
-                "type": "course",
-                "title": f"{skill} 系统课程",
-                "url": f"https://www.coursera.org/search?query={skill}",
-                "description": f"Coursera 搜索 {skill} 相关课程",
-            },
-            {
-                "type": "project",
-                "title": f"{skill} 开源项目",
-                "url": f"https://github.com/search?q={skill}&type=repositories",
-                "description": f"GitHub 搜索 {skill} 相关项目",
-            },
-            {
-                "type": "interview",
-                "title": f"{skill} 面试题汇总",
-                "url": f"https://www.google.com/search?q={skill}+interview+questions",
-                "description": f"搜索 {skill} 面试题",
-            },
-        ],
+        "resources": _template_resources(skill),
     }
 
 
@@ -219,6 +224,12 @@ async def _generate_single_suggestion(
     if not isinstance(data, dict):
         data = {}
 
+    # 资源三级兜底：LLM 输出 → 搜索结果 → 模板静态资源
+    # （LLM 按约定不编造链接，搜索空时会返回空列表，不能让用户拿到空资源）
+    resources = data.get("resources")
+    if not isinstance(resources, list) or not resources:
+        resources = search_resources[:4] or _template_resources(skill_name)
+
     return {
         "skill": skill_name,
         "category": skill_info.get("category", ""),
@@ -228,7 +239,7 @@ async def _generate_single_suggestion(
             "practice": f"通过实际项目练习 {skill_name} 的使用",
             "validation": f"通过面试题或项目验收 {skill_name} 掌握程度",
         }),
-        "resources": data.get("resources", search_resources[:4]),
+        "resources": resources,
     }
 
 
@@ -286,7 +297,8 @@ def _build_single_from_search(
             "practice": f"通过实际项目练习 {skill_name} 的使用",
             "validation": f"通过面试题或项目验收 {skill_name} 掌握程度",
         },
-        "resources": search_resources[:4],
+        # 搜索为空（Tavily 未配置/配额超限/失败）时兜底模板资源
+        "resources": search_resources[:4] or _template_resources(skill_name),
     }
 
 
