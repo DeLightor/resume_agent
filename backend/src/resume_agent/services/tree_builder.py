@@ -16,6 +16,7 @@ from typing import Any
 
 from resume_agent.db.connection import get_connection
 from resume_agent.parsers.extractor import StructuredResume
+from resume_agent.services.node_content import get_node_content, save_node_content
 
 # 方向 → branch 显示标题映射
 _DIRECTION_TITLES: dict[str, str] = {
@@ -52,23 +53,16 @@ class TreeBuilder:
             包含 ``node``（branch 节点信息）与 ``deduplicated`` 的字典。
         """
         with get_connection(self.db_path) as conn:
+            conn.execute("BEGIN IMMEDIATE")
             self._ensure_master(conn)
-            branch_node, existed = self._find_or_create_branch(conn, resume.primary_direction)
 
             # 构造 content_json：结构化简历 + personal_info
             content = resume.model_dump()
             content["personal_info"] = self._map_to_personal_info(resume)
-            content_json = json.dumps(content, ensure_ascii=False)
-
-            # 更新 branch 节点
-            conn.execute(
-                """
-                UPDATE resume_versions
-                SET content_json = ?, updated_at = datetime('now')
-                WHERE node_id = ?
-                """,
-                (content_json, branch_node["node_id"]),
-            )
+            branch_node, existed = self._find_or_create_branch(conn, resume.primary_direction, content)
+            if existed:
+                current = get_node_content(branch_node["node_id"], conn=conn)
+                save_node_content(branch_node["node_id"], content, current["version"], conn=conn)
 
             node = self._fetch_node(conn, branch_node["node_id"])
             return {"node": node, "deduplicated": existed}
@@ -130,11 +124,11 @@ class TreeBuilder:
         return "master"
 
     def _find_or_create_branch(
-        self, conn: Any, direction: str
+        self, conn: Any, direction: str, content: dict[str, Any]
     ) -> tuple[dict[str, Any], bool]:
         """查找或创建 branch 节点，返回 ``(节点字典, 是否已存在)``。"""
         row: dict[str, Any] | None = conn.execute(
-            "SELECT * FROM resume_versions WHERE node_type = ? AND direction = ?",
+            "SELECT * FROM resume_versions WHERE node_type = ? AND direction = ? AND deleted_at IS NULL",
             ("branch", direction),
         ).fetchone()
         if row is not None:
@@ -142,13 +136,15 @@ class TreeBuilder:
 
         title = _DIRECTION_TITLES.get(direction, f"{direction}方向")
         node_id = f"branch-{direction}"
+        if conn.execute("SELECT 1 FROM resume_versions WHERE node_id=?", (node_id,)).fetchone():
+            node_id = f"{node_id}-{uuid.uuid4().hex[:8]}"
         node_uuid = str(uuid.uuid4())
         conn.execute(
             """
-            INSERT INTO resume_versions (id, node_id, parent_id, node_type, title, direction)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO resume_versions (id, node_id, parent_id, node_type, title, direction, content_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (node_uuid, node_id, "master", "branch", title, direction),
+            (node_uuid, node_id, "master", "branch", title, direction, json.dumps(content, ensure_ascii=False)),
         )
         return {
             "id": node_uuid,

@@ -1,16 +1,13 @@
 // frontend/src/components/personal/PersonalInfoForm.tsx
 // US-12: 个人信息管理表单
 // - 4 个折叠区域：联系方式 / 求职意向 / 教育背景 / 自我评价
-// - 防抖保存（500ms），写入当前选中节点
+// - 共享节点草稿队列（800ms），版本校验后保存
 // - 节点切换时重新加载
 // - 支持从知识库提取
 
-import { useState, useEffect, useCallback, useRef } from 'react';
-import {
-  getPersonalInfo,
-  updatePersonalInfo,
-  extractPersonalInfo,
-} from '@/lib/api';
+import { useState } from 'react';
+import { extractPersonalInfo } from '@/lib/api';
+import { useNodeDraftById } from '@/hooks/useNodeDraft';
 import { emptyPersonalInfo, type PersonalInfo, type EducationItem } from '@/types/personal';
 
 interface PersonalInfoFormProps {
@@ -18,7 +15,6 @@ interface PersonalInfoFormProps {
   nodeId: string | null;
 }
 
-type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 
 const FIELD_LABELS = {
   // contact
@@ -105,66 +101,37 @@ function Section({
   );
 }
 
+/** Fill missing legacy fields without dropping extra imported values. */
+function personalInfo(value: unknown): PersonalInfo {
+  const empty = emptyPersonalInfo();
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return empty;
+  const raw = value as Partial<PersonalInfo>;
+  return {
+    ...empty, ...raw,
+    contact: { ...empty.contact, ...raw.contact },
+    job_intention: { ...empty.job_intention, ...raw.job_intention },
+    education: Array.isArray(raw.education) ? raw.education.map(item => ({ ...item })) : [],
+    summary: typeof raw.summary === 'string' ? raw.summary : '',
+    avatar: typeof raw.avatar === 'string' ? raw.avatar : '',
+  };
+}
+
 export default function PersonalInfoForm({ nodeId }: PersonalInfoFormProps) {
-  const [info, setInfo] = useState<PersonalInfo>(emptyPersonalInfo());
-  const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
-  const [loading, setLoading] = useState(false);
+  const draft = useNodeDraftById(nodeId);
+  const { status: saveStatus, loading } = draft;
   const [extracting, setExtracting] = useState(false);
   const [extractMsg, setExtractMsg] = useState<string | null>(null);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const skipNextSave = useRef(false);
+  const info = personalInfo(draft.content?.personal_info);
 
-  // 节点切换时加载
-  useEffect(() => {
-    if (!nodeId) {
-      setInfo(emptyPersonalInfo());
-      return;
-    }
-
-    setLoading(true);
-    getPersonalInfo(nodeId)
-      .then((data) => {
-        setInfo(data);
-        skipNextSave.current = true;
-      })
-      .catch(() => {
-        setInfo(emptyPersonalInfo());
-      })
-      .finally(() => setLoading(false));
-
-    return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-    };
-  }, [nodeId]);
-
-  // 防抖保存
-  const triggerSave = useCallback(
-    (newInfo: PersonalInfo) => {
-      if (!nodeId || skipNextSave.current) {
-        skipNextSave.current = false;
-        return;
-      }
-
-      setSaveStatus('saving');
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-      debounceRef.current = setTimeout(async () => {
-        try {
-          await updatePersonalInfo(nodeId, newInfo);
-          setSaveStatus('saved');
-          setTimeout(() => setSaveStatus('idle'), 1500);
-        } catch {
-          setSaveStatus('error');
-        }
-      }, 500);
-    },
-    [nodeId],
-  );
-
-  // 更新 contact 字段
+  function updateInfo(change: (current: PersonalInfo) => void) {
+    draft.edit(content => {
+      const current = personalInfo(content.personal_info);
+      change(current);
+      content.personal_info = current;
+    });
+  }
   function updateContact(field: keyof PersonalInfo['contact'], value: string) {
-    const newInfo = { ...info, contact: { ...info.contact, [field]: value } };
-    setInfo(newInfo);
-    triggerSave(newInfo);
+    updateInfo(current => { current.contact[field] = value; });
   }
 
   // US-24: 头像上传 — 读取文件、裁剪为方形、转 base64
@@ -200,55 +167,27 @@ export default function PersonalInfoForm({ nodeId }: PersonalInfoFormProps) {
         if (!ctx) return;
         ctx.drawImage(img, offsetX, offsetY, size, size, 0, 0, targetSize, targetSize);
         const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-        const newInfo = { ...info, avatar: dataUrl };
-        setInfo(newInfo);
-        triggerSave(newInfo);
+        updateInfo(current => { current.avatar = dataUrl; });
       };
       img.src = reader.result as string;
     };
     reader.readAsDataURL(file);
   }
 
-  // US-24: 移除头像
   function handleRemoveAvatar() {
-    const newInfo = { ...info, avatar: '' };
-    setInfo(newInfo);
-    triggerSave(newInfo);
+    updateInfo(current => { current.avatar = ''; });
   }
-
-  // 求职意向不需要用户填写，由 JD 分析自动填充
-  // function updateIntention(...) 已移除
-
-  // 更新 summary
   function updateSummary(value: string) {
-    const newInfo = { ...info, summary: value };
-    setInfo(newInfo);
-    triggerSave(newInfo);
+    updateInfo(current => { current.summary = value; });
   }
-
-  // 教育背景操作
   function addEducation() {
-    const newItem: EducationItem = { school: '', degree: '', major: '', period: '' };
-    const newInfo = { ...info, education: [...info.education, newItem] };
-    setInfo(newInfo);
-    triggerSave(newInfo);
+    updateInfo(current => { current.education.push({ school: '', degree: '', major: '', period: '' }); });
   }
-
   function updateEducation(idx: number, field: keyof EducationItem, value: string) {
-    const newEdu = [...info.education];
-    newEdu[idx] = { ...newEdu[idx], [field]: value };
-    const newInfo = { ...info, education: newEdu };
-    setInfo(newInfo);
-    triggerSave(newInfo);
+    updateInfo(current => { if (current.education[idx]) current.education[idx][field] = value; });
   }
-
   function removeEducation(idx: number) {
-    const newInfo = {
-      ...info,
-      education: info.education.filter((_, i) => i !== idx),
-    };
-    setInfo(newInfo);
-    triggerSave(newInfo);
+    updateInfo(current => { current.education.splice(idx, 1); });
   }
 
   // 从知识库提取
@@ -257,13 +196,10 @@ export default function PersonalInfoForm({ nodeId }: PersonalInfoFormProps) {
     setExtractMsg(null);
     try {
       const extracted = await extractPersonalInfo();
-      setInfo(extracted);
-      skipNextSave.current = true;
-      // 立即保存
-      if (nodeId) {
-        await updatePersonalInfo(nodeId, extracted);
-        setSaveStatus('saved');
-        setTimeout(() => setSaveStatus('idle'), 1500);
+      draft.edit(content => { content.personal_info = extracted; });
+      if (!await draft.flush()) {
+        setExtractMsg('提取结果已保留在草稿中，请处理保存提示。');
+        return;
       }
       const name = extracted.contact.name || '';
       setExtractMsg(name ? `已提取：${name}` : '已提取个人信息');
@@ -322,13 +258,15 @@ export default function PersonalInfoForm({ nodeId }: PersonalInfoFormProps) {
 
   const statusText = {
     idle: '',
+    pending: '待保存…',
+    conflict: '版本冲突',
     saving: '保存中...',
     saved: '已保存',
     error: '保存失败',
   }[saveStatus];
 
   return (
-    <div className="flex flex-col">
+    <div className="flex flex-col" onCompositionStart={() => draft.setComposing(true)} onCompositionEnd={() => draft.setComposing(false)}>
       {/* 标题栏 */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-border-subtle">
         <div className="flex items-center gap-1.5">
@@ -355,7 +293,7 @@ export default function PersonalInfoForm({ nodeId }: PersonalInfoFormProps) {
         </div>
         <button
           onClick={handleExtract}
-          disabled={extracting}
+          disabled={extracting || !draft.content}
           className="text-[10px] px-2 py-0.5 rounded border border-border-subtle text-text-secondary hover:border-brand-primary hover:text-brand-primary transition-colors disabled:opacity-50"
           title="从知识库上传的简历中提取个人信息"
         >
@@ -368,6 +306,15 @@ export default function PersonalInfoForm({ nodeId }: PersonalInfoFormProps) {
         </div>
       )}
 
+      {(draft.error || draft.loadError) && (
+        <div role="alert" className="px-3 py-2 text-xs text-error">
+          {draft.error || draft.loadError}
+          {draft.loadError ? <button onClick={() => void draft.retryLoad()} className="ml-2 underline">重试加载</button>
+            : saveStatus === 'conflict' ? <button onClick={() => { if (window.confirm('重新加载将丢弃本地未保存草稿，是否继续？')) void draft.reload(); }} className="ml-2 underline">重新加载服务端版本</button>
+            : <button onClick={() => void draft.flush()} className="ml-2 underline">重试保存</button>}
+        </div>
+      )}
+      <fieldset disabled={!draft.content}>
       {/* US-24: 头像上传 */}
       <div className="flex items-center gap-3 px-3 py-3 border-b border-border-subtle">
         {/* 头像预览 */}
@@ -533,6 +480,7 @@ export default function PersonalInfoForm({ nodeId }: PersonalInfoFormProps) {
           />
         </label>
       </Section>
+      </fieldset>
     </div>
   );
 }

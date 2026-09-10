@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+from copy import deepcopy
 from typing import Any
 
 from fastapi import APIRouter
@@ -24,7 +25,6 @@ from resume_agent.api.response import error, success
 from resume_agent.services.knowledge_search import search_knowledge
 from resume_agent.services.node_content import (
     get_node_content,
-    save_node_content,
 )
 
 logger = logging.getLogger("resume_agent")
@@ -328,7 +328,7 @@ def _resolve_personal_info(node_id: str) -> dict[str, Any]:
         while current and current not in visited:
             visited.add(current)
             row = conn.execute(
-                "SELECT content_json, parent_id FROM resume_versions WHERE node_id = ?",
+                "SELECT content_json, parent_id FROM resume_versions WHERE node_id = ? AND deleted_at IS NULL",
                 [current],
             ).fetchone()
             if not row:
@@ -489,7 +489,7 @@ async def generate_full(req: FullGenerateRequest) -> dict[str, Any]:
     - experience/projects/skills：从知识库检索素材生成
     - personal_info：从节点读取，不生成
 
-    生成结果写入节点 content_json。
+    生成结果仅返回草稿，由用户对比采纳后保存。
     """
     import asyncio
 
@@ -499,6 +499,7 @@ async def generate_full(req: FullGenerateRequest) -> dict[str, Any]:
         return error("NODE_NOT_FOUND", f"节点 {req.node_id} 不存在")
 
     # 构建 JD（如果没有传入，从节点或空 dict 读取）
+    base_content = deepcopy(content)
     structured_jd = req.structured_jd or content.get("structured_jd") or {}
     if not structured_jd:
         # 无 JD 时用通用查询词
@@ -553,11 +554,11 @@ async def generate_full(req: FullGenerateRequest) -> dict[str, Any]:
     if personal_info:
         content["personal_info"] = personal_info
 
-    # 保存到节点（在 personal_info 赋值之后）
-    save_node_content(req.node_id, content)
 
     return success({
         "node_id": req.node_id,
+        "base_version": base_content["version"],
+        "base_content": base_content,
         "sections": section_results,
         "personal_info": personal_info,
         "content": content,
@@ -580,6 +581,7 @@ async def regenerate_section(req: SectionRegenerateRequest) -> dict[str, Any]:
     if content is None:
         return error("NODE_NOT_FOUND", f"节点 {req.node_id} 不存在")
 
+    base_content = deepcopy(content)
     structured_jd = req.structured_jd or content.get("structured_jd") or {}
     if not structured_jd:
         structured_jd = {
@@ -602,12 +604,13 @@ async def regenerate_section(req: SectionRegenerateRequest) -> dict[str, Any]:
     else:
         content[req.section] = section_data.get(req.section, [])
 
-    save_node_content(req.node_id, content)
 
     return success({
         "node_id": req.node_id,
+        "base_version": base_content["version"],
+        "base_content": base_content,
         "section": req.section,
-        "content": section_data,
+        "content": content,
         "reflection": result.get("reflection"),
         "sources_used": result.get("sources_used", 0),
     })

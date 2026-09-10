@@ -218,9 +218,6 @@ function EditableSummary({
 
   function handleBlur() {
     setEditing(false);
-    if (text !== value) {
-      onChange(text);
-    }
   }
 
   if (editing) {
@@ -228,7 +225,7 @@ function EditableSummary({
       <textarea
         autoFocus
         value={text}
-        onChange={(e) => setText(e.target.value)}
+        onChange={(e) => { setText(e.target.value); onChange(e.target.value); }}
         onBlur={handleBlur}
         className="w-full text-sm text-text-secondary leading-relaxed p-2 border border-brand-primary rounded bg-white resize-none focus:outline-none focus:ring-1 focus:ring-brand-primary"
         rows={4}
@@ -267,9 +264,6 @@ function EditableText({
 
   function handleBlur() {
     setEditing(false);
-    if (text !== value) {
-      onChange(text);
-    }
   }
 
   if (editing) {
@@ -278,7 +272,7 @@ function EditableText({
         autoFocus
         type="text"
         value={text}
-        onChange={(e) => setText(e.target.value)}
+        onChange={(e) => { setText(e.target.value); onChange(e.target.value); }}
         onBlur={handleBlur}
         style={{ display: 'inline-block', width: '500px' }}
         className={`border border-brand-primary rounded px-2 py-1 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-brand-primary ${className ?? ''}`}

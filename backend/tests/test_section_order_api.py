@@ -5,6 +5,12 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 
+def _version_headers(client: TestClient, url: str) -> dict[str, str]:
+    node_url = "/api/tree/" + url.split("/")[4]
+    data = client.get(node_url).json().get("data") or {}
+    return {"If-Match": str(data.get("version", 0))}
+
+
 def _init_db() -> None:
     from resume_agent.config import settings
     from resume_agent.db.init_db import init_database
@@ -48,7 +54,7 @@ def test_update_section_order() -> None:
         {"key": "publications", "title": "论文/专利", "visible": False},
         {"key": "certificates", "title": "证书", "visible": False},
     ]
-    resp = client.put("/api/tree/node/master/section-order", json={"sections": sections})
+    resp = client.put("/api/tree/node/master/section-order", headers=_version_headers(client, "/api/tree/node/master/section-order"), json={"sections": sections})
 
     assert resp.status_code == 200
     body = resp.json()
@@ -76,7 +82,7 @@ def test_reorder() -> None:
         {"key": "publications", "title": "论文/专利", "visible": False},
         {"key": "certificates", "title": "证书", "visible": False},
     ]
-    client.put("/api/tree/node/master/section-order", json={"sections": sections})
+    client.put("/api/tree/node/master/section-order", headers=_version_headers(client, "/api/tree/node/master/section-order"), json={"sections": sections})
 
     resp = client.get("/api/tree/node/master/section-order")
     body = resp.json()
@@ -100,7 +106,7 @@ def test_toggle_visible() -> None:
         {"key": "publications", "title": "论文/专利", "visible": False},
         {"key": "certificates", "title": "证书", "visible": False},
     ]
-    resp = client.put("/api/tree/node/master/section-order", json={"sections": sections})
+    resp = client.put("/api/tree/node/master/section-order", headers=_version_headers(client, "/api/tree/node/master/section-order"), json={"sections": sections})
 
     body = resp.json()
     result = body["data"]["sections"]
@@ -139,7 +145,7 @@ def test_inherit_on_create() -> None:
         {"key": "publications", "title": "论文/专利", "visible": False},
         {"key": "certificates", "title": "证书", "visible": False},
     ]
-    client.put("/api/tree/node/master/section-order", json={"sections": sections})
+    client.put("/api/tree/node/master/section-order", headers=_version_headers(client, "/api/tree/node/master/section-order"), json={"sections": sections})
 
     # 2. 创建 branch 子节点
     resp = client.post(
@@ -174,7 +180,7 @@ def test_missing_sections_autofill() -> None:
         {"key": "summary", "title": "自我评价", "visible": True},
         {"key": "skills", "title": "技能总结", "visible": True},
     ]
-    resp = client.put("/api/tree/node/master/section-order", json={"sections": sections})
+    resp = client.put("/api/tree/node/master/section-order", headers=_version_headers(client, "/api/tree/node/master/section-order"), json={"sections": sections})
     assert resp.status_code == 200
 
     # GET 时应该自动补全到 8 段

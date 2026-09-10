@@ -19,12 +19,18 @@ import re
 import uuid
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from resume_agent.api.response import error, success
 from resume_agent.db.connection import get_connection
+from resume_agent.services.node_content import (
+    get_node_content,
+    get_node_history,
+    move_node_history,
+    save_node_content,
+)
 
 router = APIRouter(prefix="/tree", tags=["tree"])
 
@@ -56,6 +62,11 @@ class UpdateNodeRequest(BaseModel):
 
     title: str | None = None
     content_json: dict[str, Any] | None = None
+    expected_version: int | None = Field(default=None, strict=True, ge=0)
+
+
+class HistoryRequest(BaseModel):
+    expected_version: int | None = Field(default=None, strict=True, ge=0)
 
 
 def _slugify(text: str) -> str:
@@ -100,7 +111,10 @@ def _row_to_node(row: dict[str, Any]) -> dict[str, Any]:
     if content is not None:
         with contextlib.suppress(json.JSONDecodeError, TypeError):
             content = json.loads(content)  # 非 JSON 字符串时保留原值
+    if isinstance(content, dict):
+        content["version"] = row["version"]
     return {
+        "version": row["version"],
         "id": row["id"],
         "node_id": row["node_id"],
         "parent_id": row["parent_id"],
@@ -129,8 +143,9 @@ def get_tree() -> dict[str, Any]:
         rows = conn.execute(
             """
             SELECT id, node_id, parent_id, node_type, title, company, direction,
-                   content_json, has_upstream_update, created_at, updated_at
+                   content_json, has_upstream_update, version, created_at, updated_at
             FROM resume_versions
+            WHERE deleted_at IS NULL
             ORDER BY created_at, node_id
             """
         ).fetchall()
@@ -174,9 +189,10 @@ def create_node(req: CreateNodeRequest) -> dict[str, Any]:
         return error("MISSING_COMPANY", "company 节点必须提供 company 字段")
 
     with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         # 1. 验证 parent 存在
         parent = conn.execute(
-            "SELECT * FROM resume_versions WHERE node_id = ?",
+            "SELECT * FROM resume_versions WHERE node_id = ? AND deleted_at IS NULL",
             (req.parent_id,),
         ).fetchone()
         if parent is None:
@@ -193,7 +209,7 @@ def create_node(req: CreateNodeRequest) -> dict[str, Any]:
             dup = conn.execute(
                 """
                 SELECT * FROM resume_versions
-                WHERE node_type = 'company' AND company = ? AND parent_id = ?
+                WHERE node_type = 'company' AND company = ? AND parent_id = ? AND deleted_at IS NULL
                 """,
                 (req.company, req.parent_id),
             ).fetchone()
@@ -280,6 +296,75 @@ def create_node(req: CreateNodeRequest) -> dict[str, Any]:
     return success(_row_to_node(row))
 
 
+@router.get("/trash")
+def get_trash() -> dict[str, Any]:
+    """List restorable batch roots (children restore with their batch)."""
+    with get_connection() as conn:
+        items = conn.execute(
+            "SELECT n.node_id,n.title,n.deleted_at,n.delete_batch,"
+            "datetime(n.deleted_at,'+30 days') AS expires_at FROM resume_versions n "
+            "WHERE n.deleted_at > datetime('now','-30 days') AND NOT EXISTS "
+            "(SELECT 1 FROM resume_versions p WHERE p.node_id=n.parent_id "
+            "AND p.delete_batch=n.delete_batch) ORDER BY n.deleted_at DESC"
+        ).fetchall()
+    return success({"items": items})
+
+
+@router.get("/node/{node_id}/history")
+def node_history(node_id: str) -> dict[str, Any]:
+    return success(get_node_history(node_id))
+
+
+@router.post("/node/{node_id}/undo")
+def undo_node(node_id: str, req: HistoryRequest) -> dict[str, Any]:
+    if move_node_history(node_id, req.expected_version):
+        from resume_agent.api.upstream import propagate_upstream_changes
+
+        propagate_upstream_changes(node_id)
+    return get_node(node_id)
+
+
+@router.post("/node/{node_id}/redo")
+def redo_node(node_id: str, req: HistoryRequest) -> dict[str, Any]:
+    if move_node_history(node_id, req.expected_version, redo=True):
+        from resume_agent.api.upstream import propagate_upstream_changes
+
+        propagate_upstream_changes(node_id)
+    return get_node(node_id)
+
+
+@router.post("/node/{node_id}/restore")
+def restore_node(node_id: str) -> dict[str, Any]:
+    with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT * FROM resume_versions WHERE node_id=?", (node_id,)).fetchone()
+        if row is None or row["deleted_at"] is None:
+            raise HTTPException(404, "回收站节点不存在")
+        alive = conn.execute(
+            "SELECT 1 FROM resume_versions WHERE node_id=? AND deleted_at>datetime('now','-30 days')",
+            (node_id,),
+        ).fetchone()
+        if alive is None:
+            raise HTTPException(410, "已超过30天恢复期限")
+        batch = conn.execute(
+            "SELECT node_id,parent_id FROM resume_versions WHERE delete_batch=?", (row["delete_batch"],),
+        ).fetchall()
+        ids = {item["node_id"] for item in batch}
+        for item in batch:
+            parent_id = item["parent_id"]
+            if parent_id and parent_id not in ids:
+                parent = conn.execute(
+                    "SELECT 1 FROM resume_versions WHERE node_id=? AND deleted_at IS NULL", (parent_id,),
+                ).fetchone()
+                if parent is None:
+                    raise HTTPException(409, "请先恢复父节点")
+        conn.execute(
+            "UPDATE resume_versions SET deleted_at=NULL,delete_batch=NULL,version=version+1,"
+            "updated_at=datetime('now') WHERE delete_batch=?", (row["delete_batch"],),
+        )
+    return success({"restored_count": len(batch)})
+
+
 @router.get("/{node_id}")
 def get_node(node_id: str) -> dict[str, Any]:
     """获取单个节点详情。
@@ -295,7 +380,7 @@ def get_node(node_id: str) -> dict[str, Any]:
     """
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT * FROM resume_versions WHERE node_id = ?",
+            "SELECT * FROM resume_versions WHERE node_id = ? AND deleted_at IS NULL",
             (node_id,),
         ).fetchone()
 
@@ -309,98 +394,45 @@ def get_node(node_id: str) -> dict[str, Any]:
 
 @router.put("/node/{node_id}")
 def update_node(node_id: str, req: UpdateNodeRequest) -> dict[str, Any]:
-    """更新节点的 title 和/或 content_json。
-
-    content_json 存储时序列化为 JSON 字符串，返回时解析为 dict。
-
-    Args:
-        node_id: 业务节点 ID。
-        req: 更新请求体（title / content_json 均可选）。
-
-    Returns:
-        统一响应 envelope，``data`` 为更新后的节点对象。
-        节点不存在时返回 HTTP 404 + error envelope。
-    """
     with get_connection() as conn:
-        row = conn.execute(
-            "SELECT * FROM resume_versions WHERE node_id = ?",
-            (node_id,),
-        ).fetchone()
-        if row is None:
-            return JSONResponse(
-                status_code=404,
-                content=error("NODE_NOT_FOUND", f"节点不存在: {node_id}"),
-            )
+        conn.execute("BEGIN IMMEDIATE")
+        content = get_node_content(node_id, conn=conn)
+        if content is None:
+            return JSONResponse(status_code=404, content=error("NODE_NOT_FOUND", f"节点不存在: {node_id}"))
+        if req.expected_version is None:
+            raise HTTPException(428, "保存需要节点版本，请重新加载后重试")
+        save_node_content(
+            node_id, content if req.content_json is None else req.content_json,
+            req.expected_version, conn=conn, title=req.title,
+        )
+        row = conn.execute("SELECT * FROM resume_versions WHERE node_id=?", (node_id,)).fetchone()
+    if req.content_json is not None and content.get("personal_info") != req.content_json.get("personal_info"):
+        from resume_agent.api.upstream import propagate_upstream_changes
 
-        # 动态构建 SET 子句
-        updates: list[str] = []
-        params: list[Any] = []
-        if req.title is not None:
-            updates.append("title = ?")
-            params.append(req.title)
-        if req.content_json is not None:
-            updates.append("content_json = ?")
-            params.append(json.dumps(req.content_json, ensure_ascii=False))
-
-        if updates:
-            updates.append("updated_at = datetime('now')")
-            params.append(node_id)
-            conn.execute(
-                f"UPDATE resume_versions SET {', '.join(updates)} WHERE node_id = ?",
-                params,
-            )
-
-        updated = conn.execute(
-            "SELECT * FROM resume_versions WHERE node_id = ?",
-            (node_id,),
-        ).fetchone()
-
-    return success(_row_to_node(updated))
+        propagate_upstream_changes(node_id)
+    return success(_row_to_node(row))
 
 
 @router.delete("/node/{node_id}")
 def delete_node(node_id: str) -> dict[str, Any]:
-    """删除节点及其所有子孙节点。
-
-    递归查找并删除以 node_id 为根的子树（含自身）。
-    master 节点不可删除。
-
-    Args:
-        node_id: 要删除的节点 ID。
-
-    Returns:
-        统一响应 envelope，data 含 deleted_count。
-    """
+    """Soft-delete the currently live subtree under a distinct recovery batch."""
     if node_id == "master":
         return error("CANNOT_DELETE_MASTER", "master 节点不可删除")
-
     with get_connection() as conn:
-        # 检查节点是否存在
+        conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
-            "SELECT node_id FROM resume_versions WHERE node_id = ?",
-            (node_id,),
+            "SELECT node_id FROM resume_versions WHERE node_id=? AND deleted_at IS NULL", (node_id,),
         ).fetchone()
         if row is None:
             return error("NODE_NOT_FOUND", f"节点不存在: {node_id}")
-
-        # 递归收集所有子孙节点 ID
-        to_delete: list[str] = [node_id]
-        queue: list[str] = [node_id]
-        while queue:
-            current = queue.pop(0)
-            children = conn.execute(
-                "SELECT node_id FROM resume_versions WHERE parent_id = ?",
-                (current,),
-            ).fetchall()
-            for child in children:
-                to_delete.append(child["node_id"])
-                queue.append(child["node_id"])
-
-        # 批量删除
-        placeholders = ",".join("?" * len(to_delete))
-        conn.execute(
-            f"DELETE FROM resume_versions WHERE node_id IN ({placeholders})",
-            to_delete,
+        nodes = conn.execute(
+            "WITH RECURSIVE subtree(node_id) AS (SELECT node_id FROM resume_versions WHERE node_id=? "
+            "UNION ALL SELECT n.node_id FROM resume_versions n JOIN subtree s ON n.parent_id=s.node_id "
+            "WHERE n.deleted_at IS NULL) SELECT node_id FROM subtree", (node_id,),
+        ).fetchall()
+        batch = str(uuid.uuid4())
+        conn.executemany(
+            "UPDATE resume_versions SET deleted_at=datetime('now'),delete_batch=?,version=version+1,"
+            "updated_at=datetime('now') WHERE node_id=?", [(batch, n["node_id"]) for n in nodes],
         )
-
-    return success({"deleted_count": len(to_delete)})
+    return success({"deleted_count": len(nodes)})

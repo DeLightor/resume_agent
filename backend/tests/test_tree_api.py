@@ -228,12 +228,12 @@ def test_get_node_with_content_json() -> None:
 
     # PUT 写入 content_json
     content = {"basic": {"name": "张三"}, "skills": ["Python"]}
-    client.put(f"/api/tree/node/{branch_id}", json={"content_json": content})
+    client.put(f"/api/tree/node/{branch_id}", json={"content_json": content, "expected_version": 0})
 
     # GET 应返回解析后的 dict
     resp = client.get(f"/api/tree/{branch_id}")
     body = resp.json()
-    assert body["data"]["content_json"] == content
+    assert body["data"]["content_json"] == {**content, "version": 1}
 
 
 def test_get_node_not_found() -> None:
@@ -260,7 +260,7 @@ def test_update_node_title() -> None:
     client = TestClient(app)
     branch_id = _create_branch(client).json()["data"]["node_id"]
 
-    resp = client.put(f"/api/tree/node/{branch_id}", json={"title": "新标题"})
+    resp = client.put(f"/api/tree/node/{branch_id}", json={"title": "新标题", "expected_version": 0})
     assert resp.status_code == 200
     body = resp.json()
     assert body["ok"] is True
@@ -287,13 +287,13 @@ def test_update_node_content_json() -> None:
 
     content = {"basic": {"name": "张三"}, "experience": []}
     resp = client.put(
-        f"/api/tree/node/{branch_id}", json={"content_json": content}
+        f"/api/tree/node/{branch_id}", json={"content_json": content, "expected_version": 0}
     )
     assert resp.status_code == 200
     body = resp.json()
     assert body["ok"] is True
     # 返回时 content_json 应解析为 dict
-    assert body["data"]["content_json"] == content
+    assert body["data"]["content_json"] == {**content, "version": 1}
 
     # 验证 DB 中存储为 JSON 字符串
     with get_connection() as conn:
@@ -331,9 +331,9 @@ def test_update_node_both_fields() -> None:
     content = {"key": "value"}
     resp = client.put(
         f"/api/tree/node/{branch_id}",
-        json={"title": "双更新", "content_json": content},
+        json={"title": "双更新", "content_json": content, "expected_version": 0},
     )
     assert resp.status_code == 200
     data = resp.json()["data"]
     assert data["title"] == "双更新"
-    assert data["content_json"] == content
+    assert data["content_json"] == {**content, "version": 1}

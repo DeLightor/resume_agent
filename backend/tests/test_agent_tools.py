@@ -94,7 +94,7 @@ def test_read_write_node_tools(monkeypatch: Any) -> None:
     """read_node / write_node 操作节点内容，不存在节点返回 error。"""
     from resume_agent.tools import agent_tools
 
-    fake_db = {"master": {"experience": []}}
+    fake_db = {"master": {"experience": [], "version": 0}}
 
     def fake_get(node_id: str) -> dict[str, Any] | None:
         return fake_db.get(node_id)
@@ -110,16 +110,16 @@ def test_read_write_node_tools(monkeypatch: Any) -> None:
     registry = build_registry()
 
     result = _run(registry.execute("read_node", {"node_id": "master"}))
-    assert result == {"experience": []}
+    assert result == {"experience": [], "version": 0}
 
     missing = _run(registry.execute("read_node", {"node_id": "ghost"}))
     assert "error" in missing
 
     ok = _run(registry.execute(
-        "write_node", {"node_id": "master", "content": {"skills": []}}))
+        "write_node", {"node_id": "master", "content": {"skills": [], "version": 0}}))
     assert ok["ok"] is True
     assert ok["node_id"] == "master"
-    assert fake_db["master"] == {"skills": []}
+    assert fake_db["master"] == {"skills": [], "version": 0}
 
     denied = _run(registry.execute(
         "write_node", {"node_id": "ghost", "content": {}}))

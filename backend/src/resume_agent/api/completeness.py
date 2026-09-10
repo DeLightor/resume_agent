@@ -5,51 +5,21 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Header
 from pydantic import BaseModel
 
+from resume_agent.api.personal_info import _save_node_content, _write_version
 from resume_agent.api.response import error, success
+from resume_agent.services.node_content import get_node_content as _get_node_content
 
 logger = logging.getLogger("resume_agent")
 
 router = APIRouter(tags=["completeness"])
 
 
-def _get_node_content(node_id: str) -> dict[str, Any] | None:
-    """获取节点 content_json。"""
-    from resume_agent.db.connection import get_connection
-
-    with get_connection() as conn:
-        row = conn.execute(
-            "SELECT content_json FROM resume_versions WHERE node_id = ?",
-            [node_id],
-        ).fetchone()
-    if not row:
-        return None
-    raw = row["content_json"]
-    if not raw:
-        return {}
-    try:
-        return json.loads(raw) if isinstance(raw, str) else raw
-    except (json.JSONDecodeError, TypeError):
-        return {}
-
-
-def _save_node_content(node_id: str, content: dict[str, Any]) -> bool:
-    """保存节点 content_json。"""
-    from resume_agent.db.connection import get_connection
-
-    with get_connection() as conn:
-        content_str = json.dumps(content, ensure_ascii=False)
-        cursor = conn.execute(
-            "UPDATE resume_versions SET content_json = ? WHERE node_id = ?",
-            [content_str, node_id],
-        )
-    return cursor.rowcount > 0
 
 
 class CompletenessRequest(BaseModel):
@@ -202,7 +172,7 @@ async def check_completeness(req: CompletenessRequest) -> dict[str, Any]:
 
 
 @router.put("/tree/node/{node_id}/section")
-async def update_section(node_id: str, req: SectionEditRequest) -> dict[str, Any]:
+async def update_section(node_id: str, req: SectionEditRequest, if_match: str | None = Header(default=None)) -> dict[str, Any]:
     """编辑节点的某个段落。"""
     content = _get_node_content(node_id)
     if content is None:
@@ -227,7 +197,7 @@ async def update_section(node_id: str, req: SectionEditRequest) -> dict[str, Any
     else:
         content[req.section] = req.data
 
-    if not _save_node_content(node_id, content):
+    if not _save_node_content(node_id, content, expected_version=_write_version(if_match)):
         return error("UPDATE_FAILED", "保存段落失败")
 
-    return success({"section": req.section, "data": req.data})
+    return success({"section": req.section, "data": req.data, "version": content["version"]})

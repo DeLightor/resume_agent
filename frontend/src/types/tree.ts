@@ -3,6 +3,7 @@
 export type NodeType = 'master' | 'branch' | 'company';
 
 export interface ResumeNode {
+  version: number;
   id: string;
   node_id: string;
   parent_id: string | null;
@@ -48,6 +49,7 @@ export interface CreateNodeRequest {
 
 /** PUT /api/tree/node/{node_id} 请求体 */
 export interface UpdateNodeRequest {
+  expected_version: number;
   title?: string;
   content_json?: Record<string, unknown>;
 }

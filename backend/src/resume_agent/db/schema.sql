@@ -20,6 +20,11 @@ CREATE TABLE IF NOT EXISTS resume_versions (
     -- 简历内容（JSON Schema 规范化的结构化简历）
     content_json    TEXT,                      -- JSON: {basic, education, experience, projects, skills}
 
+    version         INTEGER NOT NULL DEFAULT 0,
+    history_cursor  INTEGER,
+    deleted_at      TEXT,
+    delete_batch    TEXT,
+
     -- US-17: 上游变更检测
     has_upstream_update  INTEGER DEFAULT 0,    -- 0/1: 是否有上游 personal_info 变更待合并
     upstream_changes     TEXT,                 -- JSON: {field: {old, new}} 变更详情
@@ -132,3 +137,14 @@ CREATE INDEX IF NOT EXISTS idx_agent_traces_session ON agent_traces(session_id);
 
 CREATE INDEX IF NOT EXISTS idx_upload_status ON upload_records(parse_status);
 CREATE INDEX IF NOT EXISTS idx_upload_type  ON upload_records(file_type);
+
+-- US-32: bounded per-node content history.
+CREATE TABLE IF NOT EXISTS node_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    node_id TEXT NOT NULL REFERENCES resume_versions(node_id) ON DELETE CASCADE,
+    content_json TEXT NOT NULL,
+    title TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_node_history_node ON node_history(node_id, id);

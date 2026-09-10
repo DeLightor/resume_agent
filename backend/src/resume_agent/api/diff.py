@@ -50,7 +50,7 @@ def _fetch_node(node_id: str) -> dict[str, Any] | None:
             """
             SELECT node_id, title, content_json
             FROM resume_versions
-            WHERE node_id = ?
+            WHERE node_id = ? AND deleted_at IS NULL
             """,
             (node_id,),
         ).fetchone()

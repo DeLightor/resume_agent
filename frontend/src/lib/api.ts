@@ -2,7 +2,6 @@
 // API 调用封装（fetch wrapper），统一处理 ok/data/error 格式
 
 import type {
-  ApiResponse,
   CreateNodeRequest,
   ResumeNode,
   TreeData,
@@ -47,6 +46,11 @@ const BASE_URL = '/api';
  * 当 body 为 FormData 时，不设置默认 Content-Type，
  * 由浏览器自动注入 multipart/form-data + boundary。
  */
+export class ApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) { super(message); this.status = status; }
+}
+
 export async function apiRequest<T>(
   endpoint: string,
   options?: RequestInit,
@@ -62,11 +66,12 @@ export async function apiRequest<T>(
     },
   });
 
+  const json = await res.json().catch(() => null);
   if (!res.ok) {
-    throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+    const detail = json?.detail;
+    throw new ApiError(json?.error?.message ?? (typeof detail === 'string' ? detail : detail?.message) ?? `HTTP ${res.status}: ${res.statusText}`, res.status);
   }
-
-  const json: ApiResponse<T> = await res.json();
+  if (!json) throw new ApiError('服务器返回了无法读取的响应', res.status);
 
   if (!json.ok) {
     throw new Error(json.error?.message ?? 'Unknown error');
@@ -452,8 +457,9 @@ export async function getNodeDiff(
 export async function updateNodeContent(
   nodeId: string,
   content: Record<string, unknown>,
+  expectedVersion: number,
 ): Promise<void> {
-  await api.put(`/tree/node/${nodeId}`, { content_json: content });
+  await updateNode(nodeId, { content_json: content, expected_version: expectedVersion });
 }
 
 // ===== AI 导师 API（US-11）=====
@@ -568,18 +574,18 @@ export async function getUpstreamChanges(nodeId: string): Promise<UpstreamChange
   return res;
 }
 
-export async function mergeField(nodeId: string, field: string): Promise<{ merged: boolean; remaining_changes: number }> {
-  const res = await api.post<{ merged: boolean; remaining_changes: number }>(`/tree/node/${nodeId}/merge`, { field });
+export async function mergeField(nodeId: string, field: string, version: number): Promise<{ merged: boolean; remaining_changes: number }> {
+  const res = await apiRequest<{ merged: boolean; remaining_changes: number }>(`/tree/node/${nodeId}/merge`, { method: 'POST', headers: { 'If-Match': String(version) }, body: JSON.stringify({ field }) });
   return res;
 }
 
-export async function rejectField(nodeId: string, field: string): Promise<{ rejected: boolean; remaining_changes: number }> {
-  const res = await api.post<{ rejected: boolean; remaining_changes: number }>(`/tree/node/${nodeId}/reject`, { field });
+export async function rejectField(nodeId: string, field: string, version: number): Promise<{ rejected: boolean; remaining_changes: number }> {
+  const res = await apiRequest<{ rejected: boolean; remaining_changes: number }>(`/tree/node/${nodeId}/reject`, { method: 'POST', headers: { 'If-Match': String(version) }, body: JSON.stringify({ field }) });
   return res;
 }
 
-export async function mergeAll(nodeId: string): Promise<{ merged_count: number; all_merged: boolean }> {
-  const res = await api.post<{ merged_count: number; all_merged: boolean }>(`/tree/node/${nodeId}/merge/all`);
+export async function mergeAll(nodeId: string, version: number): Promise<{ merged_count: number; all_merged: boolean }> {
+  const res = await apiRequest<{ merged_count: number; all_merged: boolean }>(`/tree/node/${nodeId}/merge/all`, { method: 'POST', headers: { 'If-Match': String(version) } });
   return res;
 }
 
@@ -701,3 +707,10 @@ export async function streamAgentChat(
     }
   }
 }
+
+export interface NodeHistory { version: number; can_undo: boolean; can_redo: boolean; entries: { id: string | number; summary: string; created_at: string }[] }
+export interface TrashItem { node_id: string; title: string; deleted_at: string; expires_at: string; delete_batch: string }
+export const getNodeHistory = (id: string) => api.get<NodeHistory>(`/tree/node/${encodeURIComponent(id)}/history`);
+export const moveNodeHistory = (id: string, direction: 'undo' | 'redo', version: number) => api.post<ResumeNode>(`/tree/node/${encodeURIComponent(id)}/${direction}`, { expected_version: version });
+export const getTrash = () => api.get<{items: TrashItem[]}>('/tree/trash');
+export const restoreNode = (id: string) => api.post(`/tree/node/${encodeURIComponent(id)}/restore`);

@@ -85,8 +85,14 @@ async def _write_node(args: dict[str, Any]) -> dict[str, Any]:
         return {"error": "node_id 不能为空"}
     if not isinstance(content, dict):
         return {"error": "content 必须是对象"}
-    if save_node_content(node_id, content):
-        return {"ok": True, "node_id": node_id}
+    from fastapi import HTTPException
+
+    try:
+        if save_node_content(node_id, content):
+            saved = get_node_content(node_id)
+            return {"ok": True, "node_id": node_id, "version": saved["version"]}
+    except HTTPException as exc:
+        return {"error": str(exc.detail), "status": exc.status_code}
     return {"error": f"节点不存在: {node_id}"}
 
 
@@ -250,7 +256,7 @@ def build_registry() -> ToolRegistry:
                 },
                 "content": {
                     "type": "object",
-                    "description": "完整简历内容对象（experience/projects/skills 等）",
+                    "description": "完整简历内容对象，必须包含 read_node 返回的 version；不得猜测或刷新版本以覆盖冲突",
                 },
             },
             "required": ["node_id", "content"],

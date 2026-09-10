@@ -18,6 +18,7 @@ from resume_agent.db.connection import get_connection
 # 表名集合，供健康检查与测试使用
 TABLES: tuple[str, ...] = (
     "resume_versions",
+    "node_history",
     "knowledge_chunks",
     "upload_records",
     "parse_tasks",
@@ -49,6 +50,7 @@ def init_database(db_path: Path | str | None = None) -> None:
     schema_sql = _load_schema_sql()
     with get_connection(path) as conn:
         conn.executescript(schema_sql)
+        _migrate_edit_protection_columns(conn)
         _migrate_upstream_columns(conn)
         _migrate_upload_direction(conn)
         _migrate_agent_session_columns(conn)
@@ -116,3 +118,16 @@ def list_tables(db_path: Path | str | None = None) -> list[str]:
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
         ).fetchall()
         return [str(row["name"]) for row in rows]
+
+
+def _migrate_edit_protection_columns(conn: sqlite3.Connection) -> None:
+    """Add edit protection columns without altering existing resume content."""
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(resume_versions)")}
+    for name, definition in (
+        ("version", "INTEGER NOT NULL DEFAULT 0"),
+        ("history_cursor", "INTEGER"),
+        ("deleted_at", "TEXT"),
+        ("delete_batch", "TEXT"),
+    ):
+        if name not in existing:
+            conn.execute(f"ALTER TABLE resume_versions ADD COLUMN {name} {definition}")

@@ -11,10 +11,12 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
 from resume_agent.api.response import error, success
+from resume_agent.services.node_content import get_node_content as _get_node_content
+from resume_agent.services.node_content import save_node_content
 
 logger = logging.getLogger("resume_agent")
 
@@ -68,41 +70,26 @@ class PersonalInfo(BaseModel):
 # === 辅助函数 ===
 
 
-def _get_node_content(node_id: str) -> dict[str, Any] | None:
-    """获取节点 content_json，不存在返回 None。"""
-    import json
 
-    from resume_agent.db.connection import get_connection
 
-    with get_connection() as conn:
-        row = conn.execute(
-            "SELECT content_json FROM resume_versions WHERE node_id = ?",
-            [node_id],
-        ).fetchone()
-    if not row:
-        return None
-    raw = row["content_json"]
-    if not raw:
-        return {}
+def _write_version(if_match: str | None) -> int:
+    if if_match is None:
+        raise HTTPException(428, "保存需要 If-Match 节点版本")
     try:
-        return json.loads(raw) if isinstance(raw, str) else raw
-    except (json.JSONDecodeError, TypeError):
-        return {}
+        return int(if_match.strip('"'))
+    except ValueError as exc:
+        raise HTTPException(400, "If-Match 必须为节点版本整数") from exc
 
 
-def _save_node_content(node_id: str, content: dict[str, Any]) -> bool:
-    """保存节点 content_json，成功返回 True。"""
-    import json
-
+def _save_node_content(node_id: str, content: dict[str, Any], expected_version: int) -> bool:
+    """Return the committed version from the same transaction as the write."""
     from resume_agent.db.connection import get_connection
 
     with get_connection() as conn:
-        content_str = json.dumps(content, ensure_ascii=False)
-        cursor = conn.execute(
-            "UPDATE resume_versions SET content_json = ? WHERE node_id = ?",
-            [content_str, node_id],
-        )
-    return cursor.rowcount > 0
+        saved = save_node_content(node_id, content, expected_version, conn=conn)
+        if saved:
+            content["version"] = _get_node_content(node_id, conn=conn)["version"]
+        return saved
 
 
 def _extract_personal_info(content: dict[str, Any]) -> PersonalInfo:
@@ -134,12 +121,12 @@ async def get_personal_info(node_id: str) -> dict[str, Any]:
         return error("NODE_NOT_FOUND", f"节点 {node_id} 不存在")
 
     pi = _extract_personal_info(content)
-    return success({"personal_info": pi.model_dump()})
+    return success({"personal_info": pi.model_dump(), "version": content["version"]})
 
 
 @router.put("/tree/node/{node_id}/personal-info")
 async def update_personal_info(
-    node_id: str, info: PersonalInfo
+    node_id: str, info: PersonalInfo, if_match: str | None = Header(default=None)
 ) -> dict[str, Any]:
     """更新节点的个人信息。
 
@@ -155,7 +142,7 @@ async def update_personal_info(
         return error("NODE_NOT_FOUND", f"节点 {node_id} 不存在")
 
     content["personal_info"] = info.model_dump()
-    if not _save_node_content(node_id, content):
+    if not _save_node_content(node_id, content, expected_version=_write_version(if_match)):
         return error("UPDATE_FAILED", "保存个人信息失败")
 
     # US-17: 触发上游变更传播到子节点
@@ -166,7 +153,7 @@ async def update_personal_info(
     except Exception as exc:
         logger.warning("upstream propagation failed: %s", exc)
 
-    return success({"personal_info": info.model_dump()})
+    return success({"personal_info": info.model_dump(), "version": content["version"]})
 
 
 @router.post("/personal-info/extract")

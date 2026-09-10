@@ -5,6 +5,12 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 
+def _version_headers(client: TestClient, url: str) -> dict[str, str]:
+    node_url = "/api/tree/" + url.split("/")[4]
+    data = client.get(node_url).json().get("data") or {}
+    return {"If-Match": str(data.get("version", 0))}
+
+
 def _init_db() -> None:
     from resume_agent.config import settings
     from resume_agent.db.init_db import init_database
@@ -48,7 +54,7 @@ def test_update_section_summary() -> None:
     _init_db()
     client = TestClient(app)
     resp = client.put(
-        "/api/tree/node/master/section",
+        "/api/tree/node/master/section", headers=_version_headers(client, "/api/tree/node/master/section"),
         json={"section": "summary", "data": "这是一个测试自我评价，内容足够长，超过二十个字"},
     )
 
@@ -72,7 +78,7 @@ def test_update_section_invalid() -> None:
     _init_db()
     client = TestClient(app)
     resp = client.put(
-        "/api/tree/node/master/section",
+        "/api/tree/node/master/section", headers=_version_headers(client, "/api/tree/node/master/section"),
         json={"section": "invalid", "data": {}},
     )
 
@@ -96,7 +102,7 @@ def test_update_section_experience() -> None:
         }
     ]
     resp = client.put(
-        "/api/tree/node/master/section",
+        "/api/tree/node/master/section", headers=_version_headers(client, "/api/tree/node/master/section"),
         json={"section": "experience", "data": experience_data},
     )
 

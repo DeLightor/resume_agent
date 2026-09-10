@@ -8,6 +8,12 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 
+def _version_headers(client: TestClient, url: str) -> dict[str, str]:
+    node_url = "/api/tree/" + url.split("/")[4]
+    data = client.get(node_url).json().get("data") or {}
+    return {"If-Match": str(data.get("version", 0))}
+
+
 def _init_db() -> None:
     """初始化测试数据库。"""
     from resume_agent.config import settings
@@ -85,7 +91,7 @@ def test_update_personal_info() -> None:
         "summary": "3 年后端开发经验",
     }
 
-    resp = client.put("/api/tree/node/master/personal-info", json=info)
+    resp = client.put("/api/tree/node/master/personal-info", headers=_version_headers(client, "/api/tree/node/master/personal-info"), json=info)
 
     assert resp.status_code == 200
     body = resp.json()
@@ -111,7 +117,7 @@ def test_get_after_update() -> None:
         "education": [],
         "summary": "",
     }
-    client.put("/api/tree/node/master/personal-info", json=info)
+    client.put("/api/tree/node/master/personal-info", headers=_version_headers(client, "/api/tree/node/master/personal-info"), json=info)
 
     # 再获取
     resp = client.get("/api/tree/node/master/personal-info")
@@ -151,7 +157,7 @@ def test_inherit_personal_info_on_create() -> None:
         "education": [],
         "summary": "",
     }
-    client.put("/api/tree/node/master/personal-info", json=info)
+    client.put("/api/tree/node/master/personal-info", headers=_version_headers(client, "/api/tree/node/master/personal-info"), json=info)
 
     # 2. 创建 branch 子节点
     branch_id = _create_branch(client, direction="fullstack")
@@ -180,7 +186,7 @@ def test_independent_modification() -> None:
         "education": [],
         "summary": "",
     }
-    client.put("/api/tree/node/master/personal-info", json=info)
+    client.put("/api/tree/node/master/personal-info", headers=_version_headers(client, "/api/tree/node/master/personal-info"), json=info)
 
     # 2. 创建 branch 子节点
     branch_id = _create_branch(client, direction="devops")
@@ -192,7 +198,7 @@ def test_independent_modification() -> None:
         "education": [],
         "summary": "",
     }
-    client.put(f"/api/tree/node/{branch_id}/personal-info", json=new_info)
+    client.put(f"/api/tree/node/{branch_id}/personal-info", headers=_version_headers(client, f"/api/tree/node/{branch_id}/personal-info"), json=new_info)
 
     # 4. 验证父节点不受影响
     resp = client.get("/api/tree/node/master/personal-info")
@@ -216,7 +222,7 @@ def test_partial_fields() -> None:
         ],
         "summary": "",
     }
-    resp = client.put("/api/tree/node/master/personal-info", json=info)
+    resp = client.put("/api/tree/node/master/personal-info", headers=_version_headers(client, "/api/tree/node/master/personal-info"), json=info)
 
     assert resp.status_code == 200
     body = resp.json()
@@ -243,7 +249,7 @@ def test_multiple_education_items() -> None:
         ],
         "summary": "",
     }
-    resp = client.put("/api/tree/node/master/personal-info", json=info)
+    resp = client.put("/api/tree/node/master/personal-info", headers=_version_headers(client, "/api/tree/node/master/personal-info"), json=info)
 
     assert resp.status_code == 200
     body = resp.json()

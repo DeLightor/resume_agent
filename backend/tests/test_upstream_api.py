@@ -7,6 +7,12 @@ import os
 from fastapi.testclient import TestClient
 
 
+def _version_headers(client: TestClient, url: str) -> dict[str, str]:
+    node_url = "/api/tree/" + url.split("/")[4]
+    data = client.get(node_url).json().get("data") or {}
+    return {"If-Match": str(data.get("version", 0))}
+
+
 def _init_db() -> None:
     """每次测试前清理并重新初始化数据库。"""
     from resume_agent.config import settings
@@ -34,7 +40,7 @@ def _create_child_node(client: TestClient, parent_id: str, title: str) -> str:
 
 def _update_personal_info(client: TestClient, node_id: str, pi: dict) -> dict:
     """更新个人信息。"""
-    resp = client.put(f"/api/tree/node/{node_id}/personal-info", json=pi)
+    resp = client.put(f"/api/tree/node/{node_id}/personal-info", headers=_version_headers(client, f"/api/tree/node/{node_id}/personal-info"), json=pi)
     return resp.json()
 
 
@@ -150,7 +156,7 @@ def test_merge_field() -> None:
     })
 
     # 合并 contact 字段
-    resp = client.post(f"/api/tree/node/{child_id}/merge", json={"field": "contact"})
+    resp = client.post(f"/api/tree/node/{child_id}/merge", headers=_version_headers(client, f"/api/tree/node/{child_id}/merge"), json={"field": "contact"})
     body = resp.json()
     assert body["ok"] is True
     assert body["data"]["merged"] is True
@@ -174,7 +180,7 @@ def test_merge_all() -> None:
     })
 
     # 全部接受
-    resp = client.post(f"/api/tree/node/{child_id}/merge/all")
+    resp = client.post(f"/api/tree/node/{child_id}/merge/all", headers=_version_headers(client, f"/api/tree/node/{child_id}/merge/all"))
     body = resp.json()
     assert body["ok"] is True
     assert body["data"]["all_merged"] is True
@@ -199,7 +205,7 @@ def test_reject_field() -> None:
     })
 
     # 拒绝 contact 字段
-    resp = client.post(f"/api/tree/node/{child_id}/reject", json={"field": "contact"})
+    resp = client.post(f"/api/tree/node/{child_id}/reject", headers=_version_headers(client, f"/api/tree/node/{child_id}/reject"), json={"field": "contact"})
     body = resp.json()
     assert body["ok"] is True
     assert body["data"]["rejected"] is True
@@ -230,7 +236,7 @@ def test_reject_all_fields_clears_flag() -> None:
 
     # 拒绝所有变更字段
     for field in changes:
-        resp = client.post(f"/api/tree/node/{child_id}/reject", json={"field": field})
+        resp = client.post(f"/api/tree/node/{child_id}/reject", headers=_version_headers(client, f"/api/tree/node/{child_id}/reject"), json={"field": field})
         body = resp.json()
         assert body["ok"] is True
 
