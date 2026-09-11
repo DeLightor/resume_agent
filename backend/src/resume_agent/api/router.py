@@ -23,6 +23,7 @@ from resume_agent.api import (
     suggest,
     templates,
     tree,
+    tree_events,
     tutor,
     upstream,
 )
@@ -33,6 +34,7 @@ api_router = APIRouter()
 api_router.include_router(health.router)
 
 # 业务路由
+api_router.include_router(tree_events.router)
 api_router.include_router(tree.router)
 api_router.include_router(resumes.router)
 api_router.include_router(knowledge.router)

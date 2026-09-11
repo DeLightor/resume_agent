@@ -166,7 +166,5 @@ def move_node_history(node_id: str, expected_version: int | None, *, redo: bool 
             "updated_at=datetime('now') WHERE node_id=?",
             (target['content_json'], target['title'], target['id'], node_id),
         )
-        return (
-            _content(row["content_json"]).get("personal_info")
-            != _content(target["content_json"]).get("personal_info")
-        )
+        before, after = _content(row["content_json"]), _content(target["content_json"])
+        return any(before.get(section) != after.get(section) for section in ("personal_info", "experience", "projects", "skills"))

@@ -90,6 +90,14 @@ async def _write_node(args: dict[str, Any]) -> dict[str, Any]:
     try:
         if save_node_content(node_id, content):
             saved = get_node_content(node_id)
+            from resume_agent.api.upstream import propagate_upstream_changes
+            try:
+                propagate_upstream_changes(node_id)
+            except Exception:  # noqa: BLE001
+                # The write has already committed.  A notification failure must
+                # never report it as an Agent write failure; normal API writes
+                # will refresh direct descendants on their next change.
+                logger.exception("agent write saved but upstream refresh failed")
             return {"ok": True, "node_id": node_id, "version": saved["version"]}
     except HTTPException as exc:
         return {"error": str(exc.detail), "status": exc.status_code}

@@ -52,6 +52,8 @@ class TreeBuilder:
         Returns:
             包含 ``node``（branch 节点信息）与 ``deduplicated`` 的字典。
         """
+        branch_node_id: str | None = None
+        existed = False
         with get_connection(self.db_path) as conn:
             conn.execute("BEGIN IMMEDIATE")
             self._ensure_master(conn)
@@ -60,12 +62,20 @@ class TreeBuilder:
             content = resume.model_dump()
             content["personal_info"] = self._map_to_personal_info(resume)
             branch_node, existed = self._find_or_create_branch(conn, resume.primary_direction, content)
+            branch_node_id = branch_node["node_id"]
             if existed:
                 current = get_node_content(branch_node["node_id"], conn=conn)
                 save_node_content(branch_node["node_id"], content, current["version"], conn=conn)
 
             node = self._fetch_node(conn, branch_node["node_id"])
-            return {"node": node, "deduplicated": existed}
+        if existed and branch_node_id is not None:
+            # The import transaction has committed.  Recompute direct children
+            # in a separate transaction so company customizations are surfaced
+            # as reviewable upstream changes rather than overwritten.
+            from resume_agent.api.upstream import propagate_upstream_changes
+
+            propagate_upstream_changes(branch_node_id, db_path=self.db_path)
+        return {"node": node, "deduplicated": existed}
 
     def _map_to_personal_info(self, resume: StructuredResume) -> dict[str, Any]:
         """将 StructuredResume 的 basic + education 映射为 personal_info 格式。

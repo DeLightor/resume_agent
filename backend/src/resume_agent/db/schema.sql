@@ -28,6 +28,9 @@ CREATE TABLE IF NOT EXISTS resume_versions (
     -- US-17: 上游变更检测
     has_upstream_update  INTEGER DEFAULT 0,    -- 0/1: 是否有上游 personal_info 变更待合并
     upstream_changes     TEXT,                 -- JSON: {field: {old, new}} 变更详情
+    upstream_baseline_json TEXT,               -- US-33: direct-parent common base content
+    upstream_source_id   TEXT,                 -- US-33: direct parent used for the snapshot
+    upstream_source_version INTEGER,            -- US-33: version displayed with the snapshot
 
     -- 时间戳
     created_at      TEXT NOT NULL DEFAULT (datetime('now')),
@@ -148,3 +151,11 @@ CREATE TABLE IF NOT EXISTS node_history (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_node_history_node ON node_history(node_id, id);
+
+-- US-33: committed invalidation feed for open version-tree clients.
+CREATE TABLE IF NOT EXISTS tree_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    node_ids TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_tree_events_id ON tree_events(id);

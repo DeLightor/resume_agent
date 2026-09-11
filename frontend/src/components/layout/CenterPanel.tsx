@@ -14,6 +14,7 @@ import AgentWorkbench from '@/components/agent/AgentWorkbench';
 import TemplateSelector from '@/components/template/TemplateSelector';
 import ResumePreview from '@/components/template/ResumePreview';
 import DiffView from '@/components/diff/DiffView';
+import UpstreamReview from '@/components/diff/UpstreamReview';
 import CompletenessBar from '@/components/completeness/CompletenessBar';
 import { getTemplates, getTree, deleteNode, generateFull, regenerateSection, getNode, moveNodeHistory, getUpstreamChanges, mergeAll, mergeField, rejectField } from '@/lib/api';
 import { useNodeDraft, nodeDraftStore } from '@/hooks/useNodeDraft';
@@ -155,6 +156,7 @@ export default function CenterPanel({
   // US-17: 上游变更
   const [upstreamChanges, setUpstreamChanges] = useState<UpstreamChanges | null>(null);
   const [showUpstreamPanel, setShowUpstreamPanel] = useState(false);
+  const [upstreamBusy, setUpstreamBusy] = useState(false);
   // 树数据由 VersionTree onTreeLoad 回灌，用于路径回溯与新建节点父选项
   const [tree, setTree] = useState<TreeData | null>(null);
   // US-8：模板列表（从 API 获取，失败时用 fallback）
@@ -201,75 +203,55 @@ export default function CenterPanel({
     return () => { cancelled = true; };
   }, [selectedNode]);
 
-  // US-17: 全部接受合并
-  const handleMergeAll = useCallback(async () => {
-    if (!selectedNode || !await draft.flush()) return;
-    try {
-      await mergeAll(selectedNode.node_id, nodeDraftStore.get(selectedNode.node_id).version);
-      if (selectedId.current !== selectedNode.node_id) return;
-      setUpstreamChanges(null);
-      setShowUpstreamPanel(false);
-      // 刷新节点数据
-      const data = await getTree();
-      setTree(data);
-      const updated = data.nodes.find((n) => n.node_id === selectedNode.node_id);
-      if (updated && selectedId.current === updated.node_id) setSelectedNode(updated);
-      onTreeNodesUpdate?.(data.nodes);
-      const refreshed = await getNode(selectedNode.node_id);
-      if (selectedId.current === refreshed.node_id) setSelectedNode(refreshed);
-    } catch (error) { setActionError(error instanceof Error ? error.message : '合并失败'); }
-  }, [selectedNode, onTreeNodesUpdate, draft.flush]);
+  // US-33: this is an invalidation signal, not a content transport.  The
+  // draft store keeps a dirty editor intact and marks a genuine server race.
+  useEffect(() => {
+    const stream = new EventSource('/api/tree/events');
+    stream.addEventListener('tree_update', () => {
+      void getTree().then((data) => {
+        setTree(data);
+        onTreeNodesUpdate?.(data.nodes);
+        const id = selectedId.current;
+        if (!id) return;
+        return getNode(id).then((node) => {
+          if (selectedId.current !== id) return;
+          nodeDraftStore.receive(node);
+          setSelectedNode(node);
+        });
+      }).catch(() => { /* EventSource reconnects; the next signal retries. */ });
+    });
+    return () => stream.close();
+  }, [onTreeNodesUpdate]);
 
-  // US-18: 单字段接受合并
-  const handleMergeField = useCallback(async (field: string) => {
-    if (!selectedNode || !await draft.flush()) return;
-    try {
-      await mergeField(selectedNode.node_id, field, nodeDraftStore.get(selectedNode.node_id).version);
-      if (selectedId.current !== selectedNode.node_id) return;
-      // 刷新上游变更状态
-      const data = await getUpstreamChanges(selectedNode.node_id);
-      if (selectedId.current !== selectedNode.node_id) return;
-      if (data.has_upstream_update && data.count > 0) {
-        setUpstreamChanges(data);
-      } else {
-        setUpstreamChanges(null);
-        setShowUpstreamPanel(false);
-        // 刷新树节点状态
-        const treeData = await getTree();
-        setTree(treeData);
-        const updated = treeData.nodes.find((n) => n.node_id === selectedNode.node_id);
-        if (updated && selectedId.current === updated.node_id) setSelectedNode(updated);
-        onTreeNodesUpdate?.(treeData.nodes);
-      }
-      const refreshed = await getNode(selectedNode.node_id);
-      if (selectedId.current === refreshed.node_id) setSelectedNode(refreshed);
-    } catch (error) { setActionError(error instanceof Error ? error.message : '合并失败'); }
-  }, [selectedNode, onTreeNodesUpdate, draft.flush]);
+  const refreshUpstream = useCallback(async (nodeId: string) => {
+    const [snapshot, treeData, refreshed] = await Promise.all([getUpstreamChanges(nodeId), getTree(), getNode(nodeId)]);
+    if (selectedId.current !== nodeId) return;
+    setUpstreamChanges(snapshot.has_upstream_update && snapshot.count ? snapshot : null);
+    if (!snapshot.has_upstream_update || !snapshot.count) setShowUpstreamPanel(false);
+    setTree(treeData);
+    onTreeNodesUpdate?.(treeData.nodes);
+    nodeDraftStore.receive(refreshed);
+    setSelectedNode(refreshed);
+  }, [onTreeNodesUpdate]);
 
-  // US-18: 单字段拒绝
-  const handleRejectField = useCallback(async (field: string) => {
-    if (!selectedNode || !await draft.flush()) return;
+  const handleUpstreamAction = useCallback(async (action: 'accept' | 'retain' | 'all', field?: string) => {
+    if (!selectedNode || !upstreamChanges || upstreamChanges.upstream_version === null || !await draft.flush()) return;
+    const nodeId = selectedNode.node_id;
     try {
-      await rejectField(selectedNode.node_id, field, nodeDraftStore.get(selectedNode.node_id).version);
-      if (selectedId.current !== selectedNode.node_id) return;
-      // 刷新上游变更状态
-      const data = await getUpstreamChanges(selectedNode.node_id);
-      if (selectedId.current !== selectedNode.node_id) return;
-      if (data.has_upstream_update && data.count > 0) {
-        setUpstreamChanges(data);
-      } else {
-        setUpstreamChanges(null);
-        setShowUpstreamPanel(false);
-        const treeData = await getTree();
-        setTree(treeData);
-        const updated = treeData.nodes.find((n) => n.node_id === selectedNode.node_id);
-        if (updated && selectedId.current === updated.node_id) setSelectedNode(updated);
-        onTreeNodesUpdate?.(treeData.nodes);
-      }
-      const refreshed = await getNode(selectedNode.node_id);
-      if (selectedId.current === refreshed.node_id) setSelectedNode(refreshed);
-    } catch (error) { setActionError(error instanceof Error ? error.message : '合并失败'); }
-  }, [selectedNode, onTreeNodesUpdate, draft.flush]);
+      setUpstreamBusy(true);
+      const version = nodeDraftStore.get(nodeId).version;
+      if (action === 'all') await mergeAll(nodeId, version, upstreamChanges.upstream_version);
+      else if (action === 'accept' && field) await mergeField(nodeId, field, version, upstreamChanges.upstream_version);
+      else if (action === 'retain' && field) await rejectField(nodeId, field, version, upstreamChanges.upstream_version);
+      await refreshUpstream(nodeId);
+    } catch (error) {
+      const stale = error instanceof Error && /节点已更新|上游内容已更新|409/.test(error.message);
+      setActionError(stale ? '内容已更新，已刷新变更，请重新选择。' : error instanceof Error ? error.message : '合并失败，请刷新后重试');
+      if (stale) void refreshUpstream(nodeId);
+    } finally {
+      setUpstreamBusy(false);
+    }
+  }, [selectedNode, upstreamChanges, draft.flush, refreshUpstream]);
 
   // US-14: 一键生成 / 单段重生成
   const generationLock = useRef(false);
@@ -452,14 +434,13 @@ export default function CenterPanel({
       {activeTab === '回收站' ? <TrashPanel onChanged={() => onTreeRefresh?.()} /> : activeTab === '编辑器' ? (
         // US-8：编辑器 Tab = 模板选择器 + 工具栏 + 简历预览
         <div className="flex-1 flex flex-col overflow-hidden">
-          {/* US-17: 上游变更提示 + 展开面板 */}
+          {/* US-33: 内容级上游变更提示 + 展开审阅 */}
           {upstreamChanges?.has_upstream_update && (
             <div className="border-b border-orange-200 bg-orange-50">
-              {/* 提示条 */}
               <div className="px-4 py-2 flex items-center gap-2">
                 <span className="w-2 h-2 bg-orange-500 rounded-full flex-shrink-0 animate-pulse" />
                 <span className="text-xs text-orange-700">
-                  上游有 {upstreamChanges.count} 项个人信息变更待合并
+                  上游有 {upstreamChanges.count} 项内容变更待审阅
                 </span>
                 <button
                   onClick={() => setShowUpstreamPanel(!showUpstreamPanel)}
@@ -468,94 +449,8 @@ export default function CenterPanel({
                   {showUpstreamPanel ? '收起 ▲' : '查看变更 ▼'}
                 </button>
               </div>
-              {/* 展开的变更列表 */}
               {showUpstreamPanel && (
-                <div className="px-4 pb-3 space-y-2">
-                  {Object.entries(upstreamChanges.changes).map(([field, change]) => {
-                    const fieldLabel = field === 'contact' ? '联系方式' : field === 'education' ? '教育背景' : field === 'summary' ? '自我评价' : field;
-                    const oldVal = change.old;
-                    const newVal = change.new;
-
-                    // 对象类型（contact / education）：字段级表格渲染
-                    const isObject = (v: unknown) => v !== null && typeof v === 'object';
-                    const isObjectDiff = isObject(oldVal) || isObject(newVal);
-                    const oldObj = (oldVal && typeof oldVal === 'object' ? oldVal : {}) as Record<string, unknown>;
-                    const newObj = (newVal && typeof newVal === 'object' ? newVal : {}) as Record<string, unknown>;
-                    const allKeys = Array.from(new Set([...Object.keys(oldObj), ...Object.keys(newObj)]));
-
-                    // 字段名中文映射
-                    const fieldNames: Record<string, string> = {
-                      name: '姓名', gender: '性别', birth_date: '出生年月', phone: '电话',
-                      email: '邮箱', location: '所在城市', website: '个人网站',
-                      github: 'GitHub', linkedin: 'LinkedIn',
-                      school: '学校', degree: '学历', major: '专业', start_date: '开始', end_date: '结束',
-                    };
-
-                    return (
-                      <div key={field} className="bg-white rounded-md border border-orange-200 p-2.5 space-y-1.5">
-                        <div className="flex items-center justify-between">
-                          <div className="text-xs font-medium text-text-primary">{fieldLabel}</div>
-                          {/* US-18: 逐字段接受/拒绝按钮 */}
-                          <div className="flex gap-1">
-                            <button
-                              onClick={() => handleMergeField(field)}
-                              className="px-2 py-0.5 text-[10px] font-medium text-white bg-green-500 hover:bg-green-600 rounded transition-colors"
-                            >
-                              接受
-                            </button>
-                            <button
-                              onClick={() => handleRejectField(field)}
-                              className="px-2 py-0.5 text-[10px] font-medium text-text-secondary bg-gray-100 hover:bg-gray-200 rounded transition-colors"
-                            >
-                              拒绝
-                            </button>
-                          </div>
-                        </div>
-                        {isObjectDiff ? (
-                          <div className="space-y-0.5">
-                            {allKeys.map((key) => {
-                              const ov = oldObj[key];
-                              const nv = newObj[key];
-                              const changed = JSON.stringify(ov) !== JSON.stringify(nv);
-                              return (
-                                <div key={key} className={`flex items-center gap-2 px-2 py-0.5 rounded-sm text-xs ${changed ? 'bg-orange-50' : ''}`}>
-                                  <span className="text-text-muted w-16 flex-shrink-0">{fieldNames[key] ?? key}</span>
-                                  {changed ? (
-                                    <>
-                                      <span className="text-error line-through flex-1">{String(ov ?? '')}</span>
-                                      <span className="text-text-muted">→</span>
-                                      <span className="text-success flex-1">{String(nv ?? '')}</span>
-                                    </>
-                                  ) : (
-                                    <span className="text-text-tertiary flex-1">{String(nv ?? '')}</span>
-                                  )}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        ) : (
-                          <div className="flex items-start gap-2">
-                            <div className="flex-1">
-                              <span className="text-[10px] text-error mr-1">旧:</span>
-                              <span className="text-xs text-text-tertiary line-through">{String(oldVal ?? '')}</span>
-                            </div>
-                            <span className="text-text-muted text-xs">→</span>
-                            <div className="flex-1">
-                              <span className="text-[10px] text-success mr-1">新:</span>
-                              <span className="text-xs text-text-primary">{String(newVal ?? '')}</span>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                  <button
-                    onClick={handleMergeAll}
-                    className="w-full py-2 text-xs font-medium text-white bg-orange-500 hover:bg-orange-600 rounded-md transition-colors"
-                  >
-                    全部接受合并
-                  </button>
-                </div>
+                <UpstreamReview snapshot={upstreamChanges} source={upstreamChanges.source_node_id ?? '上游节点'} busy={upstreamBusy} stale={draft.status === 'conflict'} onRefresh={() => { if (selectedNode) void refreshUpstream(selectedNode.node_id); }} onAction={(action, field) => void handleUpstreamAction(action, field)} />
               )}
             </div>
           )}
