@@ -128,6 +128,9 @@ def _migrate_edit_protection_columns(conn: sqlite3.Connection) -> None:
         ("history_cursor", "INTEGER"),
         ("deleted_at", "TEXT"),
         ("delete_batch", "TEXT"),
+        ("upstream_baseline_json", "TEXT"),
+        ("upstream_source_id", "TEXT"),
+        ("upstream_source_version", "INTEGER"),
     ):
         if name not in existing:
             conn.execute(f"ALTER TABLE resume_versions ADD COLUMN {name} {definition}")

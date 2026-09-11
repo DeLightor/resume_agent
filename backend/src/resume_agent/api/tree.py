@@ -256,8 +256,9 @@ def create_node(req: CreateNodeRequest) -> dict[str, Any]:
             conn.execute(
                 """
                 INSERT INTO resume_versions
-                    (id, node_id, parent_id, node_type, title, company, direction, content_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    (id, node_id, parent_id, node_type, title, company, direction, content_json,
+                     upstream_baseline_json, upstream_source_id, upstream_source_version)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     node_uuid,
@@ -268,14 +269,18 @@ def create_node(req: CreateNodeRequest) -> dict[str, Any]:
                     req.company,
                     req.direction,
                     content_json_str,
+                    parent_content_raw or "{}",
+                    req.parent_id,
+                    parent["version"],
                 ),
             )
         else:
             conn.execute(
                 """
                 INSERT INTO resume_versions
-                    (id, node_id, parent_id, node_type, title, company, direction)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                    (id, node_id, parent_id, node_type, title, company, direction,
+                     upstream_baseline_json, upstream_source_id, upstream_source_version)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     node_uuid,
@@ -285,6 +290,9 @@ def create_node(req: CreateNodeRequest) -> dict[str, Any]:
                     req.title,
                     req.company,
                     req.direction,
+                    parent_content_raw or "{}",
+                    req.parent_id,
+                    parent["version"],
                 ),
             )
 
@@ -401,12 +409,16 @@ def update_node(node_id: str, req: UpdateNodeRequest) -> dict[str, Any]:
             return JSONResponse(status_code=404, content=error("NODE_NOT_FOUND", f"节点不存在: {node_id}"))
         if req.expected_version is None:
             raise HTTPException(428, "保存需要节点版本，请重新加载后重试")
+        previous_content = {key: value for key, value in content.items() if key != "version"}
         save_node_content(
             node_id, content if req.content_json is None else req.content_json,
             req.expected_version, conn=conn, title=req.title,
         )
         row = conn.execute("SELECT * FROM resume_versions WHERE node_id=?", (node_id,)).fetchone()
-    if req.content_json is not None and content.get("personal_info") != req.content_json.get("personal_info"):
+    if req.content_json is not None and any(
+        previous_content.get(section) != req.content_json.get(section)
+        for section in ("personal_info", "experience", "projects", "skills")
+    ):
         from resume_agent.api.upstream import propagate_upstream_changes
 
         propagate_upstream_changes(node_id)

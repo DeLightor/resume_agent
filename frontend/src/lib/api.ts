@@ -565,7 +565,10 @@ export async function updateSection(
 
 export interface UpstreamChanges {
   has_upstream_update: boolean;
-  changes: Record<string, { old: unknown; new: unknown }>;
+  changes: Record<string, { section: string; label: string; old: unknown; new: unknown; base: unknown; conflict: boolean }>;
+  version: number;
+  upstream_version: number | null;
+  source_node_id: string | null;
   count: number;
 }
 
@@ -574,18 +577,18 @@ export async function getUpstreamChanges(nodeId: string): Promise<UpstreamChange
   return res;
 }
 
-export async function mergeField(nodeId: string, field: string, version: number): Promise<{ merged: boolean; remaining_changes: number }> {
-  const res = await apiRequest<{ merged: boolean; remaining_changes: number }>(`/tree/node/${nodeId}/merge`, { method: 'POST', headers: { 'If-Match': String(version) }, body: JSON.stringify({ field }) });
+export async function mergeField(nodeId: string, field: string, version: number, upstreamVersion: number): Promise<{ merged: boolean; remaining_changes: number }> {
+  const res = await apiRequest<{ merged: boolean; remaining_changes: number }>(`/tree/node/${nodeId}/merge`, { method: 'POST', headers: { 'If-Match': String(version) }, body: JSON.stringify({ field, upstream_version: upstreamVersion }) });
   return res;
 }
 
-export async function rejectField(nodeId: string, field: string, version: number): Promise<{ rejected: boolean; remaining_changes: number }> {
-  const res = await apiRequest<{ rejected: boolean; remaining_changes: number }>(`/tree/node/${nodeId}/reject`, { method: 'POST', headers: { 'If-Match': String(version) }, body: JSON.stringify({ field }) });
+export async function rejectField(nodeId: string, field: string, version: number, upstreamVersion: number): Promise<{ rejected: boolean; remaining_changes: number }> {
+  const res = await apiRequest<{ rejected: boolean; remaining_changes: number }>(`/tree/node/${nodeId}/reject`, { method: 'POST', headers: { 'If-Match': String(version) }, body: JSON.stringify({ field, upstream_version: upstreamVersion }) });
   return res;
 }
 
-export async function mergeAll(nodeId: string, version: number): Promise<{ merged_count: number; all_merged: boolean }> {
-  const res = await apiRequest<{ merged_count: number; all_merged: boolean }>(`/tree/node/${nodeId}/merge/all`, { method: 'POST', headers: { 'If-Match': String(version) } });
+export async function mergeAll(nodeId: string, version: number, upstreamVersion: number): Promise<{ merged_count: number; all_merged: boolean }> {
+  const res = await apiRequest<{ merged_count: number; all_merged: boolean }>(`/tree/node/${nodeId}/merge/all`, { method: 'POST', headers: { 'If-Match': String(version) }, body: JSON.stringify({ upstream_version: upstreamVersion }) });
   return res;
 }
 

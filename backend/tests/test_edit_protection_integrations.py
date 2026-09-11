@@ -217,4 +217,7 @@ def test_history_on_unrelated_field_keeps_rejected_upstream_changes(client):
     client.post('/api/tree/node/master/undo', json={'expected_version': 2})
     assert client.get(upstream_url).json()['data']['has_upstream_update'] is False
     client.post('/api/tree/node/master/redo', json={'expected_version': 3})
-    assert client.get(upstream_url).json()['data']['has_upstream_update'] is False
+    # US-33 now tracks skills as content-level upstream changes.  The prior
+    # rejection was only for personal information, so redoing a skill change
+    # must surface one fresh decision.
+    assert client.get(upstream_url).json()['data']['has_upstream_update'] is True
