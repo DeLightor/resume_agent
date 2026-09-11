@@ -64,3 +64,5 @@ temp/
 
 # === 参赛材料（本地保留，不入库） ===
 contest/
+.playwright-cli/
+
