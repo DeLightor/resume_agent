@@ -1,381 +1,195 @@
-"""上游变更检测与提示（US-17）。
-
-当 master 节点修改 personal_info 后，递归标记所有子节点
-`has_upstream_update=1`，并记录字段级差异到 `upstream_changes`。
-"""
-
+"""Direct-parent, three-way upstream decisions for resume content (US-33)."""
 from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter
-from pydantic import BaseModel
+from fastapi import APIRouter, Header, HTTPException
+from pydantic import BaseModel, Field
 
+from resume_agent.api.personal_info import _write_version
 from resume_agent.api.response import error, success
+from resume_agent.api.tree_events import record_tree_update
+from resume_agent.db.connection import get_connection
+from resume_agent.services.content_merge import apply_change, build_changes
+from resume_agent.services.node_content import get_node_content, save_node_content
 
 logger = logging.getLogger("resume_agent")
-
 router = APIRouter(tags=["upstream"])
-
-# 递归遍历上限
 MAX_NODES = 50
 
 
-def _get_node_content(node_id: str) -> dict[str, Any] | None:
-    """获取节点 content_json。"""
-    from resume_agent.db.connection import get_connection
-
-    with get_connection() as conn:
-        row = conn.execute(
-            "SELECT content_json FROM resume_versions WHERE node_id = ?",
-            [node_id],
-        ).fetchone()
-    if not row:
-        return None
-    raw = row["content_json"]
-    if not raw:
-        return {}
+def _decode(value: Any) -> dict[str, Any]:
     try:
-        return json.loads(raw) if isinstance(raw, str) else raw
-    except (json.JSONDecodeError, TypeError):
-        return {}
+        result = json.loads(value) if value else {}
+    except (TypeError, ValueError):
+        result = {}
+    return result if isinstance(result, dict) else {}
 
 
-def _get_children(node_id: str) -> list[dict[str, Any]]:
-    """获取直接子节点。"""
-    from resume_agent.db.connection import get_connection
-
-    with get_connection() as conn:
-        rows = conn.execute(
-            "SELECT node_id, content_json, parent_id FROM resume_versions WHERE parent_id = ?",
-            [node_id],
-        ).fetchall()
-    return [dict(row) for row in rows]
+def _children(conn: Any, node_id: str) -> list[dict[str, Any]]:
+    return conn.execute("SELECT * FROM resume_versions WHERE parent_id=? AND deleted_at IS NULL", (node_id,)).fetchall()
 
 
-def _diff_personal_info(
-    parent_pi: dict[str, Any],
-    child_pi: dict[str, Any],
-) -> dict[str, dict[str, Any]]:
-    """字段级差异对比。
-
-    对比 personal_info 的三个子字段：contact / education / summary。
-    返回 {field: {old, new}} 格式。
-    """
-    changes: dict[str, dict[str, Any]] = {}
-
-    for field in ("contact", "education", "summary"):
-        parent_val = parent_pi.get(field)
-        child_val = child_pi.get(field)
-
-        # 标准化为可比较的 JSON 字符串
-        parent_norm = json.dumps(parent_val, ensure_ascii=False, sort_keys=True)
-        child_norm = json.dumps(child_val, ensure_ascii=False, sort_keys=True)
-
-        if parent_norm != child_norm:
-            changes[field] = {
-                "old": child_val,
-                "new": parent_val,
-            }
-
-    return changes
-
-
-def _mark_upstream_update(
-    node_id: str,
-    changes: dict[str, dict[str, Any]],
-) -> None:
-    """标记节点有上游变更。"""
-    from resume_agent.db.connection import get_connection
-
-    changes_json = json.dumps(changes, ensure_ascii=False)
-    with get_connection() as conn:
+def _update_child_snapshot(conn: Any, child: dict[str, Any], parent: dict[str, Any]) -> bool:
+    """Recompute one direct child's pending decisions in the caller transaction."""
+    baseline_raw = child.get("upstream_baseline_json")
+    if not baseline_raw:
+        # Existing nodes do not have a reliable common ancestor.  Start tracking
+        # from their current direct parent without inventing old conflicts.
         conn.execute(
-            "UPDATE resume_versions SET has_upstream_update = 1, upstream_changes = ? WHERE node_id = ?",
-            [changes_json, node_id],
+            "UPDATE resume_versions SET upstream_baseline_json=?,upstream_source_id=?,upstream_source_version=? WHERE node_id=?",
+            (parent["content_json"] or "{}", parent["node_id"], parent["version"], child["node_id"]),
         )
-
-
-def _clear_upstream_update(node_id: str) -> None:
-    """清除上游变更标记。"""
-    from resume_agent.db.connection import get_connection
-
-    with get_connection() as conn:
+        return False
+    changes = build_changes(_decode(baseline_raw), _decode(parent["content_json"]), _decode(child["content_json"]))
+    encoded = json.dumps(changes, ensure_ascii=False) if changes else None
+    pending_changed = (child.get("upstream_changes") or None) != encoded or bool(child.get("has_upstream_update")) != bool(changes)
+    source_changed = child.get("upstream_source_version") != parent["version"] or child.get("upstream_source_id") != parent["node_id"]
+    if pending_changed:
         conn.execute(
-            "UPDATE resume_versions SET has_upstream_update = 0, upstream_changes = NULL WHERE node_id = ?",
-            [node_id],
+            "UPDATE resume_versions SET has_upstream_update=?,upstream_changes=?,upstream_source_id=?,upstream_source_version=?,version=version+1,updated_at=datetime('now') WHERE node_id=?",
+            (int(bool(changes)), encoded, parent["node_id"], parent["version"], child["node_id"]),
         )
+    elif source_changed:
+        conn.execute(
+            "UPDATE resume_versions SET upstream_source_id=?,upstream_source_version=? WHERE node_id=?",
+            (parent["node_id"], parent["version"], child["node_id"]),
+        )
+    return pending_changed
 
 
-def propagate_upstream_changes(node_id: str) -> int:
-    """递归标记所有子节点的上游变更。
-
-    Args:
-        node_id: 被修改的节点 ID（通常是 master）
-
-    Returns:
-        标记的节点数量
-    """
-    parent_content = _get_node_content(node_id)
-    if parent_content is None:
-        return 0
-
-    parent_pi = parent_content.get("personal_info", {})
-    if not isinstance(parent_pi, dict):
-        parent_pi = {}
-
-    count = 0
-    visited = {node_id}
-
-    def _recurse(pid: str, p_pi: dict[str, Any]) -> None:
-        nonlocal count
-        if count >= MAX_NODES:
-            return
-
-        children = _get_children(pid)
-        for child in children:
-            child_id = child["node_id"]
-            if child_id in visited:
-                continue
-            visited.add(child_id)
-
-            child_content_str = child.get("content_json", "")
-            if child_content_str:
-                try:
-                    child_content = json.loads(child_content_str) if isinstance(child_content_str, str) else child_content_str
-                except (json.JSONDecodeError, TypeError):
-                    child_content = {}
-            else:
-                child_content = {}
-
-            child_pi = child_content.get("personal_info", {})
-            if not isinstance(child_pi, dict):
-                child_pi = {}
-
-            changes = _diff_personal_info(p_pi, child_pi)
-            if changes:
-                _mark_upstream_update(child_id, changes)
-                count += 1
-            else:
-                # 无差异，清除旧标记
-                _clear_upstream_update(child_id)
-
-            # 递归处理子节点的子节点
-            _recurse(child_id, p_pi)
-
-    _recurse(node_id, parent_pi)
-    logger.info("propagate_upstream_changes: marked %d nodes from %s", count, node_id)
-    return count
-
-
-# === API 端点 ===
+def propagate_upstream_changes(node_id: str, db_path: Path | str | None = None) -> int:
+    """Reconcile a changed node, then refresh its direct descendants."""
+    touched: list[str] = []
+    with get_connection(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        parent = conn.execute("SELECT * FROM resume_versions WHERE node_id=? AND deleted_at IS NULL", (node_id,)).fetchone()
+        if parent is None:
+            return 0
+        # A child can manually converge with its current parent.  Its old
+        # pending prompt must disappear before that child becomes source for
+        # descendants.
+        if parent.get("parent_id"):
+            direct_parent = conn.execute(
+                "SELECT * FROM resume_versions WHERE node_id=? AND deleted_at IS NULL", (parent["parent_id"],),
+            ).fetchone()
+            if direct_parent is not None and _update_child_snapshot(conn, parent, direct_parent):
+                touched.append(node_id)
+        for child in _children(conn, node_id)[:MAX_NODES]:
+            if _update_child_snapshot(conn, child, parent):
+                touched.append(child["node_id"])
+        if touched:
+            record_tree_update(conn, touched)
+    logger.info("propagate_upstream_changes: refreshed %d children from %s", len(touched), node_id)
+    return len(touched)
 
 
 class MergeRequest(BaseModel):
-    """单字段合并请求。"""
-
     field: str
+    upstream_version: int | None = Field(default=None, ge=0)
 
 
-class RejectRequest(BaseModel):
-    """单字段拒绝请求。"""
+class RejectRequest(MergeRequest):
+    pass
 
-    field: str
+
+class MergeAllRequest(BaseModel):
+    upstream_version: int | None = Field(default=None, ge=0)
+
+
+def _snapshot_for(row: dict[str, Any]) -> dict[str, Any]:
+    changes = _decode(row.get("upstream_changes"))
+    public = {key: {name: value for name, value in item.items() if not name.startswith("_")}
+              for key, item in changes.items() if isinstance(item, dict)}
+    return {
+        "has_upstream_update": bool(row.get("has_upstream_update")), "changes": public,
+        "count": len(public), "version": row["version"], "upstream_version": row.get("upstream_source_version"),
+        "source_node_id": row.get("upstream_source_id"),
+    }
 
 
 @router.get("/tree/node/{node_id}/upstream-changes")
 async def get_upstream_changes(node_id: str) -> dict[str, Any]:
-    """获取节点的上游变更列表。"""
-    from resume_agent.db.connection import get_connection
-
     with get_connection() as conn:
-        row = conn.execute(
-            "SELECT has_upstream_update, upstream_changes FROM resume_versions WHERE node_id = ?",
-            [node_id],
-        ).fetchone()
-
-    if not row:
+        row = conn.execute("SELECT * FROM resume_versions WHERE node_id=? AND deleted_at IS NULL", (node_id,)).fetchone()
+    if row is None:
         return error("NODE_NOT_FOUND", f"节点 {node_id} 不存在")
+    return success(_snapshot_for(row))
 
-    has_update = bool(row["has_upstream_update"])
-    changes_raw = row["upstream_changes"]
 
-    changes: dict[str, Any] = {}
-    if changes_raw:
-        try:
-            changes = json.loads(changes_raw) if isinstance(changes_raw, str) else changes_raw
-        except (json.JSONDecodeError, TypeError):
-            changes = {}
-
-    return success({
-        "has_upstream_update": has_update,
-        "changes": changes,
-        "count": len(changes),
-    })
+def _apply_upstream(node_id: str, fields: list[str] | None, reject: bool, if_match: str | None, upstream_version: int | None) -> dict[str, Any]:
+    expected = _write_version(if_match)
+    changed_content = False
+    with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT * FROM resume_versions WHERE node_id=? AND deleted_at IS NULL", (node_id,)).fetchone()
+        if row is None:
+            return error("NODE_NOT_FOUND", f"节点 {node_id} 不存在")
+        if row["version"] != expected:
+            raise HTTPException(409, {"message": "节点已更新，请刷新后重试", "version": row["version"]})
+        source_id = row.get("upstream_source_id")
+        source = conn.execute("SELECT * FROM resume_versions WHERE node_id=? AND deleted_at IS NULL", (source_id,)).fetchone() if source_id else None
+        displayed_version = row.get("upstream_source_version") if upstream_version is None else upstream_version
+        legacy = not source_id
+        if not legacy and (source is None or source["version"] != displayed_version or row.get("upstream_source_version") != displayed_version):
+            raise HTTPException(409, "上游内容已更新，请刷新后重新选择")
+        changes = _decode(row.get("upstream_changes"))
+        if not changes:
+            return error("NO_CHANGES", "没有待处理的上游变更")
+        selected = list(changes) if fields is None else fields
+        if any(field not in changes for field in selected):
+            return error("FIELD_NOT_FOUND", "指定变更已不存在，请刷新后重试")
+        if fields is None and any(bool(changes[field].get("conflict")) for field in selected):
+            raise HTTPException(409, "存在冲突，请逐项选择采用上游或保留当前")
+        content = get_node_content(node_id, conn=conn) or {}
+        baseline = _decode(row.get("upstream_baseline_json"))
+        for field in selected:
+            decision = changes[field]
+            if "_locator" not in decision:
+                # US-17 rows created before common baselines.  Keep their
+                # original API usable while new snapshots always use locators.
+                decision = {**decision, "_locator": {"kind": "path", "path": ["personal_info", field]},
+                            "_new_missing": False, "_old_missing": False, "_base_missing": False}
+            if not reject:
+                content = apply_change(content, decision)
+                changed_content = True
+            baseline = apply_change(baseline, decision)
+            del changes[field]
+        if changed_content:
+            save_node_content(node_id, content, expected, conn=conn)
+        current = conn.execute("SELECT version FROM resume_versions WHERE node_id=?", (node_id,)).fetchone()["version"]
+        if current == expected:
+            conn.execute("UPDATE resume_versions SET version=version+1,updated_at=datetime('now') WHERE node_id=?", (node_id,))
+            current += 1
+        conn.execute(
+            "UPDATE resume_versions SET upstream_baseline_json=?,upstream_changes=?,has_upstream_update=? WHERE node_id=?",
+            (json.dumps(baseline, ensure_ascii=False), json.dumps(changes, ensure_ascii=False) if changes else None, int(bool(changes)), node_id),
+        )
+        notify = [node_id]
+        if changed_content:
+            for descendant in _children(conn, node_id)[:MAX_NODES]:
+                parent_after = {**row, "node_id": node_id, "content_json": json.dumps(content, ensure_ascii=False), "version": current}
+                if _update_child_snapshot(conn, descendant, parent_after):
+                    notify.append(descendant["node_id"])
+        record_tree_update(conn, notify)
+    if fields is None:
+        return success({"merged_count": len(selected), "all_merged": True, "version": current})
+    return success({"field": selected[0], "rejected" if reject else "merged": True, "remaining_changes": len(changes), "version": current})
 
 
 @router.post("/tree/node/{node_id}/merge")
-async def merge_field(node_id: str, req: MergeRequest) -> dict[str, Any]:
-    """合并指定字段（US-18 用，US-17 仅定义端点）。"""
-    from resume_agent.db.connection import get_connection
-
-    with get_connection() as conn:
-        row = conn.execute(
-            "SELECT upstream_changes, content_json FROM resume_versions WHERE node_id = ?",
-            [node_id],
-        ).fetchone()
-
-    if not row:
-        return error("NODE_NOT_FOUND", f"节点 {node_id} 不存在")
-
-    changes_raw = row["upstream_changes"]
-    if not changes_raw:
-        return error("NO_CHANGES", "没有待合并的上游变更")
-
-    try:
-        changes = json.loads(changes_raw) if isinstance(changes_raw, str) else changes_raw
-    except (json.JSONDecodeError, TypeError):
-        return error("PARSE_ERROR", "变更数据解析失败")
-
-    if req.field not in changes:
-        return error("FIELD_NOT_FOUND", f"字段 {req.field} 没有待合并的变更")
-
-    # 获取变更数据
-    change = changes[req.field]
-    new_value = change.get("new")
-
-    # 更新 content_json
-    content_raw = row["content_json"]
-    content = json.loads(content_raw) if isinstance(content_raw, str) and content_raw else {}
-    pi = content.get("personal_info", {})
-    if not isinstance(pi, dict):
-        pi = {}
-    pi[req.field] = new_value
-    content["personal_info"] = pi
-
-    # 从变更列表中移除已合并的字段
-    del changes[req.field]
-
-    # 保存
-    content_json = json.dumps(content, ensure_ascii=False)
-    changes_json = json.dumps(changes, ensure_ascii=False) if changes else None
-    has_update = 1 if changes else 0
-
-    with get_connection() as conn:
-        conn.execute(
-            "UPDATE resume_versions SET content_json = ?, upstream_changes = ?, has_upstream_update = ? WHERE node_id = ?",
-            [content_json, changes_json, has_update, node_id],
-        )
-
-    return success({
-        "field": req.field,
-        "merged": True,
-        "remaining_changes": len(changes),
-    })
+async def merge_field(node_id: str, req: MergeRequest, if_match: str | None = Header(default=None)) -> dict[str, Any]:
+    return _apply_upstream(node_id, [req.field], False, if_match, req.upstream_version)
 
 
 @router.post("/tree/node/{node_id}/merge/all")
-async def merge_all(node_id: str) -> dict[str, Any]:
-    """批量全部接受上游变更（US-18 用，US-17 仅定义端点）。"""
-    from resume_agent.db.connection import get_connection
-
-    with get_connection() as conn:
-        row = conn.execute(
-            "SELECT upstream_changes, content_json FROM resume_versions WHERE node_id = ?",
-            [node_id],
-        ).fetchone()
-
-    if not row:
-        return error("NODE_NOT_FOUND", f"节点 {node_id} 不存在")
-
-    changes_raw = row["upstream_changes"]
-    if not changes_raw:
-        return error("NO_CHANGES", "没有待合并的上游变更")
-
-    try:
-        changes = json.loads(changes_raw) if isinstance(changes_raw, str) else changes_raw
-    except (json.JSONDecodeError, TypeError):
-        return error("PARSE_ERROR", "变更数据解析失败")
-
-    # 更新 content_json
-    content_raw = row["content_json"]
-    content = json.loads(content_raw) if isinstance(content_raw, str) and content_raw else {}
-    pi = content.get("personal_info", {})
-    if not isinstance(pi, dict):
-        pi = {}
-
-    merged_count = 0
-    for field, change in changes.items():
-        pi[field] = change.get("new")
-        merged_count += 1
-
-    content["personal_info"] = pi
-    content_json = json.dumps(content, ensure_ascii=False)
-
-    with get_connection() as conn:
-        conn.execute(
-            "UPDATE resume_versions SET content_json = ?, upstream_changes = NULL, has_upstream_update = 0 WHERE node_id = ?",
-            [content_json, node_id],
-        )
-
-    return success({
-        "merged_count": merged_count,
-        "all_merged": True,
-    })
+async def merge_all(node_id: str, req: MergeAllRequest | None = None, if_match: str | None = Header(default=None)) -> dict[str, Any]:
+    return _apply_upstream(node_id, None, False, if_match, req.upstream_version if req else None)
 
 
 @router.post("/tree/node/{node_id}/reject")
-async def reject_field(node_id: str, req: RejectRequest) -> dict[str, Any]:
-    """拒绝指定字段的上游变更（US-18）。
-
-    从 upstream_changes 中移除该字段，不修改 content_json。
-    当所有字段都被处理完后，清除 has_upstream_update 标记。
-    """
-    from resume_agent.db.connection import get_connection
-
-    with get_connection() as conn:
-        row = conn.execute(
-            "SELECT upstream_changes FROM resume_versions WHERE node_id = ?",
-            [node_id],
-        ).fetchone()
-
-    if not row:
-        return error("NODE_NOT_FOUND", f"节点 {node_id} 不存在")
-
-    changes_raw = row["upstream_changes"]
-    if not changes_raw:
-        return error("NO_CHANGES", "没有待处理的上游变更")
-
-    try:
-        changes = json.loads(changes_raw) if isinstance(changes_raw, str) else changes_raw
-    except (json.JSONDecodeError, TypeError):
-        return error("PARSE_ERROR", "变更数据解析失败")
-
-    if req.field not in changes:
-        return error("FIELD_NOT_FOUND", f"字段 {req.field} 没有待处理的变更")
-
-    # 从变更列表中移除被拒绝的字段
-    del changes[req.field]
-
-    # 如果还有剩余变更，保留标记；否则清除
-    if changes:
-        changes_json = json.dumps(changes, ensure_ascii=False)
-        with get_connection() as conn:
-            conn.execute(
-                "UPDATE resume_versions SET upstream_changes = ? WHERE node_id = ?",
-                [changes_json, node_id],
-            )
-    else:
-        with get_connection() as conn:
-            conn.execute(
-                "UPDATE resume_versions SET upstream_changes = NULL, has_upstream_update = 0 WHERE node_id = ?",
-                [node_id],
-            )
-
-    return success({
-        "field": req.field,
-        "rejected": True,
-        "remaining_changes": len(changes),
-    })
+async def reject_field(node_id: str, req: RejectRequest, if_match: str | None = Header(default=None)) -> dict[str, Any]:
+    return _apply_upstream(node_id, [req.field], True, if_match, req.upstream_version)

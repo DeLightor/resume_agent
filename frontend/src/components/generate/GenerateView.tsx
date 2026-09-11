@@ -4,7 +4,10 @@
 // 修复：切换段落不清空已有结果 + 支持单项选择加入预览
 
 import { useEffect, useState, useCallback } from 'react';
-import { exportResumePDF, generateResume, generateSuggestions, updateNodeContent } from '@/lib/api';
+import { nodeDraftStore } from '@/hooks/useNodeDraft';
+import ContentDraftReview from '@/components/diff/ContentDraftReview';
+import type { DraftReview } from '@/components/diff/ContentDraftReview';
+import { generateResume, generateSuggestions, getNode } from '@/lib/api';
 import type {
   GeneratedExperience,
   GeneratedProject,
@@ -21,10 +24,9 @@ interface GenerateViewProps {
   gapReport?: Record<string, unknown> | null;
   /** US-8：生成成功后回调，把结果传给 MainLayout 供中栏预览 */
   onResumeGenerated?: (data: Record<string, unknown>) => void;
-  /** US-8：当前选中的模板 id，用于导出 PDF */
-  templateId?: string;
   /** US-10：版本树节点列表，用于"保存到节点" */
   treeNodes?: ResumeNode[];
+  templateId?: string;
 }
 
 type Status = 'idle' | 'loading' | 'done' | 'error';
@@ -71,7 +73,6 @@ export default function GenerateView({
   structuredJD,
   gapReport,
   onResumeGenerated,
-  templateId,
   treeNodes,
 }: GenerateViewProps) {
   const [status, setStatus] = useState<Status>('idle');
@@ -90,13 +91,12 @@ export default function GenerateView({
   >({});
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [loadingStep, setLoadingStep] = useState(0);
-  const [exporting, setExporting] = useState(false);
   const [suggesting, setSuggesting] = useState(false);
   const [suggestLoadedBySection, setSuggestLoadedBySection] = useState<
     Record<string, boolean>
   >({});
   // US-10：保存到节点的状态
-  const [savingToNode, setSavingToNode] = useState(false);
+  const [savingToNode, setSavingToNode] = useState(false);  const [draftReview, setDraftReview] = useState<DraftReview | null>(null);
   const [showSaveDialog, setShowSaveDialog] = useState(false);
   const [saveTargetNode, setSaveTargetNode] = useState<string>('');
   const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
@@ -259,55 +259,18 @@ export default function GenerateView({
     }));
   }
 
-  /** US-7：导出 PDF（使用所有段落的合并结果） */
-  async function handleExportPDF() {
-    if (exporting) return;
-    const merged = mergeAllSections(resultsBySection, excludedBySection);
-    if (Object.keys(merged).length === 0) return;
-
-    setExporting(true);
-    setErrorMsg(null);
-    try {
-      const resumeData: Record<string, unknown> = { name: '我的简历', ...merged };
-      const jobTitle =
-        (structuredJD as Record<string, unknown>)?.job_title as string ?? '';
-      const company =
-        (structuredJD as Record<string, unknown>)?.company as string ?? '';
-      const blob = await exportResumePDF(resumeData, jobTitle, company, templateId);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `resume_${jobTitle || 'export'}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : '导出失败');
-      console.error('PDF 导出失败:', err);
-    } finally {
-      setExporting(false);
-    }
-  }
-
-  /** US-10：保存合并后的简历内容到版本树节点 */
   async function handleSaveToNode() {
     if (savingToNode || !saveTargetNode) return;
     const merged = mergeAllSections(resultsBySection, excludedBySection);
-    if (Object.keys(merged).length === 0) return;
-
+    if (!Object.keys(merged).length) return;
     setSavingToNode(true);
-    setSaveSuccess(null);
     try {
-      await updateNodeContent(saveTargetNode, merged);
-      setSaveSuccess(`已保存到节点: ${saveTargetNode}`);
+      if (!await nodeDraftStore.flush(saveTargetNode)) throw new Error('请先处理目标节点的未保存草稿');
+      const node = await getNode(saveTargetNode);
+      setDraftReview({ node, content: { ...node.content_json, ...merged }, baseVersion: node.version });
       setShowSaveDialog(false);
-      setTimeout(() => setSaveSuccess(null), 3000);
-    } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : '保存失败');
-    } finally {
-      setSavingToNode(false);
-    }
+    } catch (error) { setErrorMsg(error instanceof Error ? error.message : '保存失败'); }
+    finally { setSavingToNode(false); }
   }
 
   // 无 JD 数据
@@ -472,6 +435,7 @@ export default function GenerateView({
           )}
 
           {/* 保存到节点对话框 */}
+          {draftReview && <ContentDraftReview draft={draftReview} onClose={() => setDraftReview(null)} onApplied={(node) => { nodeDraftStore.receive(node); window.dispatchEvent(new CustomEvent('node-draft-saved', { detail: node })); setDraftReview(null); setSaveSuccess(`已保存到节点: ${node.title}`); }} />}
           {showSaveDialog && (
             <div className="border border-border-default rounded-md p-2 space-y-2 bg-bg-elevated">
               <div className="text-xs font-medium text-text-primary">选择目标节点</div>
@@ -505,15 +469,8 @@ export default function GenerateView({
             </div>
           )}
 
-          {/* 导出 + 保存 + 重新生成按钮 */}
+          {/* 保存与重新生成按钮 */}
           <div className="flex gap-2">
-            <button
-              onClick={handleExportPDF}
-              disabled={exporting}
-              className="flex-1 text-xs px-3 py-1.5 rounded-md bg-brand-primary text-white font-medium cursor-pointer hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {exporting ? '导出中...' : '导出 PDF'}
-            </button>
             <button
               onClick={() => setShowSaveDialog(!showSaveDialog)}
               disabled={savingToNode}

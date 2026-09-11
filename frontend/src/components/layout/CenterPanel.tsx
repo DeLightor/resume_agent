@@ -14,14 +14,19 @@ import AgentWorkbench from '@/components/agent/AgentWorkbench';
 import TemplateSelector from '@/components/template/TemplateSelector';
 import ResumePreview from '@/components/template/ResumePreview';
 import DiffView from '@/components/diff/DiffView';
+import UpstreamReview from '@/components/diff/UpstreamReview';
 import CompletenessBar from '@/components/completeness/CompletenessBar';
-import { getTemplates, getTree, deleteNode, generateFull, regenerateSection, updateSection, getUpstreamChanges, mergeAll, mergeField, rejectField } from '@/lib/api';
+import { getTemplates, getTree, deleteNode, generateFull, regenerateSection, getNode, moveNodeHistory, getUpstreamChanges, mergeAll, mergeField, rejectField } from '@/lib/api';
+import { useNodeDraft, nodeDraftStore } from '@/hooks/useNodeDraft';
+import ContentDraftReview from '@/components/diff/ContentDraftReview';
+import type { DraftReview } from '@/components/diff/ContentDraftReview';
+import { HistoryPanel, TrashPanel } from '@/components/tree/EditProtectionPanels';
 import type { UpstreamChanges } from '@/lib/api';
 import type { ResumeNode, TreeData } from '@/types/tree';
 import type { ActiveView } from '@/types/knowledge';
 import type { TemplateInfo } from '@/types/template';
 
-const TAB_PILLS = ['版本树', '编辑器', 'Diff 对比'] as const;
+const TAB_PILLS = ['版本树', '编辑器', 'Diff 对比', '回收站'] as const;
 
 /** API 调用失败时的硬编码 fallback 模板 */
 const FALLBACK_TEMPLATES: TemplateInfo[] = [
@@ -99,7 +104,6 @@ export default function CenterPanel({
   onTemplateSelect,
   onTreeNodesUpdate,
   onNodeSelect,
-  sectionOrderVersion = 0,
   structuredJD = null,
   onExpandRightPanel,
   navKey = 0,
@@ -114,10 +118,45 @@ export default function CenterPanel({
     setActiveTab('版本树');
   }, [navKey]);
   const [selectedNode, setSelectedNode] = useState<ResumeNode | null>(null);
+  const draft = useNodeDraft(selectedNode);
+  const [actionError, setActionError] = useState('');
+  const [draftReview, setDraftReview] = useState<DraftReview | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
+  const selectedId = useRef<string | null>(null);
+  selectedId.current = selectedNode?.node_id ?? null;
+  const applySavedNode = useCallback((node: ResumeNode) => {
+    if (selectedId.current === node.node_id) setSelectedNode(node);
+    onTreeRefresh?.();
+  }, [onTreeRefresh]);
+  useEffect(() => {
+    const saved = (event: Event) => {
+      const node = (event as CustomEvent<ResumeNode>).detail;
+      if (selectedId.current === node.node_id) setSelectedNode(node);
+    };
+    window.addEventListener('node-draft-saved', saved);
+    return () => window.removeEventListener('node-draft-saved', saved);
+  }, []);
+  useEffect(() => { void draft.flush(); }, [activeView, navKey]);
+  useEffect(() => {
+    const undo = async (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement;
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'z' || event.altKey || target.closest('input, textarea, select, [contenteditable="true"], dialog')) return;
+      if (!selectedNode || activeView !== 'version-tree') return;
+      event.preventDefault();
+      if (!await draft.flush()) return;
+      try {
+        const id = selectedNode.node_id;
+        applySavedNode(await moveNodeHistory(id, event.shiftKey ? 'redo' : 'undo', nodeDraftStore.get(id).version));
+      } catch (error) { setActionError(error instanceof Error ? error.message : '撤销失败'); }
+    };
+    window.addEventListener('keydown', undo);
+    return () => window.removeEventListener('keydown', undo);
+  }, [selectedNode, activeView, draft.flush, applySavedNode]);
   const [showCreateModal, setShowCreateModal] = useState(false);
   // US-17: 上游变更
   const [upstreamChanges, setUpstreamChanges] = useState<UpstreamChanges | null>(null);
   const [showUpstreamPanel, setShowUpstreamPanel] = useState(false);
+  const [upstreamBusy, setUpstreamBusy] = useState(false);
   // 树数据由 VersionTree onTreeLoad 回灌，用于路径回溯与新建节点父选项
   const [tree, setTree] = useState<TreeData | null>(null);
   // US-8：模板列表（从 API 获取，失败时用 fallback）
@@ -140,11 +179,12 @@ export default function CenterPanel({
     };
   }, []);
 
-  const handleNodeSelect = useCallback((node: ResumeNode) => {
+  const handleNodeSelect = useCallback(async (node: ResumeNode) => {
+    if (!await draft.flush()) return;
     setSelectedNode(node);
     onNodeSelect?.(node.node_id);
     setShowUpstreamPanel(false);
-  }, [onNodeSelect]);
+  }, [onNodeSelect, draft.flush]);
 
   // US-17: 选中节点时拉取上游变更状态
   useEffect(() => {
@@ -163,81 +203,58 @@ export default function CenterPanel({
     return () => { cancelled = true; };
   }, [selectedNode]);
 
-  // US-17: 全部接受合并
-  const handleMergeAll = useCallback(async () => {
-    if (!selectedNode) return;
-    try {
-      await mergeAll(selectedNode.node_id);
-      setUpstreamChanges(null);
-      setShowUpstreamPanel(false);
-      // 刷新节点数据
-      const data = await getTree();
-      setTree(data);
-      const updated = data.nodes.find((n) => n.node_id === selectedNode.node_id);
-      if (updated) setSelectedNode(updated);
-      onTreeNodesUpdate?.(data.nodes);
-    } catch {
-      // 静默失败
-    }
-  }, [selectedNode, onTreeNodesUpdate]);
-
-  // US-18: 单字段接受合并
-  const handleMergeField = useCallback(async (field: string) => {
-    if (!selectedNode) return;
-    try {
-      await mergeField(selectedNode.node_id, field);
-      // 刷新上游变更状态
-      const data = await getUpstreamChanges(selectedNode.node_id);
-      if (data.has_upstream_update && data.count > 0) {
-        setUpstreamChanges(data);
-      } else {
-        setUpstreamChanges(null);
-        setShowUpstreamPanel(false);
-        // 刷新树节点状态
-        const treeData = await getTree();
-        setTree(treeData);
-        const updated = treeData.nodes.find((n) => n.node_id === selectedNode.node_id);
-        if (updated) setSelectedNode(updated);
-        onTreeNodesUpdate?.(treeData.nodes);
-      }
-    } catch {
-      // 静默失败
-    }
-  }, [selectedNode, onTreeNodesUpdate]);
-
-  // US-18: 单字段拒绝
-  const handleRejectField = useCallback(async (field: string) => {
-    if (!selectedNode) return;
-    try {
-      await rejectField(selectedNode.node_id, field);
-      // 刷新上游变更状态
-      const data = await getUpstreamChanges(selectedNode.node_id);
-      if (data.has_upstream_update && data.count > 0) {
-        setUpstreamChanges(data);
-      } else {
-        setUpstreamChanges(null);
-        setShowUpstreamPanel(false);
-        const treeData = await getTree();
-        setTree(treeData);
-        const updated = treeData.nodes.find((n) => n.node_id === selectedNode.node_id);
-        if (updated) setSelectedNode(updated);
-        onTreeNodesUpdate?.(treeData.nodes);
-      }
-    } catch {
-      // 静默失败
-    }
-  }, [selectedNode, onTreeNodesUpdate]);
-
-  // US-13: section_order 更新后重新拉取选中节点的 content_json
+  // US-33: this is an invalidation signal, not a content transport.  The
+  // draft store keeps a dirty editor intact and marks a genuine server race.
   useEffect(() => {
-    if (sectionOrderVersion === 0 || !selectedNode) return;
-    getTree().then((data: TreeData) => {
-      const updated = data.nodes.find((n) => n.node_id === selectedNode.node_id);
-      if (updated) setSelectedNode(updated);
+    const stream = new EventSource('/api/tree/events');
+    stream.addEventListener('tree_update', () => {
+      void getTree().then((data) => {
+        setTree(data);
+        onTreeNodesUpdate?.(data.nodes);
+        const id = selectedId.current;
+        if (!id) return;
+        return getNode(id).then((node) => {
+          if (selectedId.current !== id) return;
+          nodeDraftStore.receive(node);
+          setSelectedNode(node);
+        });
+      }).catch(() => { /* EventSource reconnects; the next signal retries. */ });
     });
-  }, [sectionOrderVersion]);
+    return () => stream.close();
+  }, [onTreeNodesUpdate]);
+
+  const refreshUpstream = useCallback(async (nodeId: string) => {
+    const [snapshot, treeData, refreshed] = await Promise.all([getUpstreamChanges(nodeId), getTree(), getNode(nodeId)]);
+    if (selectedId.current !== nodeId) return;
+    setUpstreamChanges(snapshot.has_upstream_update && snapshot.count ? snapshot : null);
+    if (!snapshot.has_upstream_update || !snapshot.count) setShowUpstreamPanel(false);
+    setTree(treeData);
+    onTreeNodesUpdate?.(treeData.nodes);
+    nodeDraftStore.receive(refreshed);
+    setSelectedNode(refreshed);
+  }, [onTreeNodesUpdate]);
+
+  const handleUpstreamAction = useCallback(async (action: 'accept' | 'retain' | 'all', field?: string) => {
+    if (!selectedNode || !upstreamChanges || upstreamChanges.upstream_version === null || !await draft.flush()) return;
+    const nodeId = selectedNode.node_id;
+    try {
+      setUpstreamBusy(true);
+      const version = nodeDraftStore.get(nodeId).version;
+      if (action === 'all') await mergeAll(nodeId, version, upstreamChanges.upstream_version);
+      else if (action === 'accept' && field) await mergeField(nodeId, field, version, upstreamChanges.upstream_version);
+      else if (action === 'retain' && field) await rejectField(nodeId, field, version, upstreamChanges.upstream_version);
+      await refreshUpstream(nodeId);
+    } catch (error) {
+      const stale = error instanceof Error && /节点已更新|上游内容已更新|409/.test(error.message);
+      setActionError(stale ? '内容已更新，已刷新变更，请重新选择。' : error instanceof Error ? error.message : '合并失败，请刷新后重试');
+      if (stale) void refreshUpstream(nodeId);
+    } finally {
+      setUpstreamBusy(false);
+    }
+  }, [selectedNode, upstreamChanges, draft.flush, refreshUpstream]);
 
   // US-14: 一键生成 / 单段重生成
+  const generationLock = useRef(false);
   const [generating, setGenerating] = useState(false);
   const [generatingSection, setGeneratingSection] = useState<string | null>(null);
   const [generateMsg, setGenerateMsg] = useState<string | null>(null);
@@ -245,37 +262,30 @@ export default function CenterPanel({
   const [completenessRefreshKey, setCompletenessRefreshKey] = useState(0);
   // US-22: 底部"为该岗位动态生成"按钮 → 切换到编辑器 Tab + 触发生成
 
-  const reloadSelectedNode = useCallback(() => {
-    if (!selectedNode) return;
-    getTree().then((data: TreeData) => {
-      const updated = data.nodes.find((n) => n.node_id === selectedNode.node_id);
-      if (updated) {
-        setSelectedNode(updated);
-        setCompletenessRefreshKey((k) => k + 1);
-      }
-    });
-  }, [selectedNode]);
-
   const handleGenerateFull = useCallback(async () => {
-    if (!selectedNode || generating) return;
+    if (!selectedNode || generationLock.current) return;
     if (!structuredJD) {
       setGenerateMsg('请先在右栏上传 JD 招聘信息');
       setTimeout(() => setGenerateMsg(null), 3000);
       return;
     }
+    generationLock.current = true;
     setGenerating(true);
     setGenerateMsg(null);
     try {
-      await generateFull(selectedNode.node_id, structuredJD ?? undefined);
-      reloadSelectedNode();
-      setGenerateMsg('一键生成完成');
+      if (!await draft.flush()) return;
+      const base = await getNode(selectedNode.node_id);
+      const result = await generateFull(base.node_id, structuredJD ?? undefined);
+      setDraftReview({ node: { ...base, content_json: result.base_content as Record<string, unknown> }, content: result.content as Record<string, unknown>, baseVersion: Number(result.base_version) });
+      setGenerateMsg('生成完成，请审阅草稿');
     } catch (err: unknown) {
       setGenerateMsg(err instanceof Error ? err.message : '生成失败');
     } finally {
+      generationLock.current = false;
       setGenerating(false);
       setTimeout(() => setGenerateMsg(null), 3000);
     }
-  }, [selectedNode, generating, reloadSelectedNode, structuredJD]);
+  }, [selectedNode, generating, draft.flush, structuredJD]);
 
   // US-22: 底部"为该岗位动态生成"按钮 → 切换到编辑器 Tab + 触发生成
   const handleBottomGenerate = useCallback(async () => {
@@ -300,42 +310,32 @@ export default function CenterPanel({
 
   const handleRegenerateSection = useCallback(
     async (section: string) => {
-      if (!selectedNode || generatingSection) return;
+      if (!selectedNode || generationLock.current) return;
       if (!structuredJD) {
         setGenerateMsg('请先在右栏上传 JD 招聘信息');
         setTimeout(() => setGenerateMsg(null), 3000);
         return;
       }
+      generationLock.current = true;
       setGeneratingSection(section);
       try {
-        await regenerateSection(selectedNode.node_id, section, structuredJD ?? undefined);
-        reloadSelectedNode();
-      } catch {
-        // 静默
+        if (!await draft.flush()) return;
+        const base = await getNode(selectedNode.node_id);
+        const result = await regenerateSection(base.node_id, section, structuredJD ?? undefined);
+        setDraftReview({ node: { ...base, content_json: result.base_content as Record<string, unknown> }, content: result.content as Record<string, unknown>, baseVersion: Number(result.base_version) });
+      } catch (error) {
+        setActionError(error instanceof Error ? error.message : '生成失败');
       } finally {
+        generationLock.current = false;
         setGeneratingSection(null);
       }
     },
-    [selectedNode, generatingSection, reloadSelectedNode, structuredJD],
+    [selectedNode, generatingSection, draft.flush, structuredJD],
   );
 
-  // US-15: 段落编辑（防抖保存）
-  const editDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const handleEditSection = useCallback(
-    (section: string, data: unknown) => {
-      if (!selectedNode) return;
-      if (editDebounceRef.current) clearTimeout(editDebounceRef.current);
-      editDebounceRef.current = setTimeout(async () => {
-        try {
-          await updateSection(selectedNode.node_id, section, data);
-          reloadSelectedNode();
-        } catch {
-          // 静默
-        }
-      }, 500);
-    },
-    [selectedNode, reloadSelectedNode],
-  );
+  const handleEditSection = useCallback((section: string, data: unknown) => {
+    draft.edit(content => { content[section] = data; });
+  }, [draft.edit]);
 
   const handleTreeLoad = useCallback((data: TreeData) => {
     setTree(data);
@@ -354,9 +354,9 @@ export default function CenterPanel({
     [onTemplateSelect],
   );
 
-  const handleDeleteNode = useCallback(() => {
-    if (!selectedNode) return;
-    if (window.confirm(`确认删除节点 "${selectedNode.title || selectedNode.node_id}" 吗？`)) {
+  const handleDeleteNode = useCallback(async () => {
+    if (!selectedNode || !await draft.flush()) return;
+    if (window.confirm(`确认删除节点 "${selectedNode.title || selectedNode.node_id}" 及其子节点移入回收站吗？30 天内可恢复。`)) {
       deleteNode(selectedNode.node_id)
         .then(() => {
           setSelectedNode(null);
@@ -364,10 +364,10 @@ export default function CenterPanel({
           onTreeRefresh?.();
         })
         .catch((err) => {
-          console.error('删除节点失败:', err);
+          setActionError(err instanceof Error ? err.message : '删除失败');
         });
     }
-  }, [selectedNode, onNodeSelect, onTreeRefresh]);
+  }, [selectedNode, onNodeSelect, onTreeRefresh, draft.flush]);
 
   // 知识库视图：渲染 KnowledgeView，不显示版本树 Tab / 面包屑
   if (activeView === 'knowledge') {
@@ -396,22 +396,7 @@ export default function CenterPanel({
   }
 
   // 预览数据：优先用选中节点的 content_json，否则用 AI 生成的 resumeData
-  const previewData: Record<string, unknown> | null = (() => {
-    if (selectedNode?.content_json) {
-      try {
-        const parsed =
-          typeof selectedNode.content_json === 'string'
-            ? JSON.parse(selectedNode.content_json)
-            : selectedNode.content_json;
-        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-          return parsed as Record<string, unknown>;
-        }
-      } catch {
-        // JSON 解析失败，fallback
-      }
-    }
-    return resumeData;
-  })();
+  const previewData = draft.content ?? resumeData;
 
   const breadcrumbPath = computePath(tree, selectedNode);
 
@@ -424,7 +409,7 @@ export default function CenterPanel({
           {TAB_PILLS.map((pill) => (
             <button
               key={pill}
-              onClick={() => setActiveTab(pill)}
+              onClick={async () => { if (await draft.flush()) setActiveTab(pill); }}
               className={`px-4 py-1 rounded-sm text-xs transition-all border-none cursor-pointer font-body ${
                 activeTab === pill
                   ? 'bg-bg-elevated text-text-primary font-medium shadow-sm'
@@ -437,18 +422,25 @@ export default function CenterPanel({
         </div>
       </div>
 
+      {selectedNode && <div className="flex flex-wrap gap-3 items-center px-4 py-2 border-b border-border-subtle text-xs" onCompositionStart={() => draft.setComposing(true)} onCompositionEnd={() => draft.setComposing(false)}>
+        <span role="status">{{idle: '已同步', pending: '待保存…', saving: '保存中…', saved: '已保存', error: '保存失败', conflict: '版本冲突'}[draft.status]}</span>
+        <button onClick={() => setShowHistory(v => !v)}>编辑历史 / 撤销</button>
+        {draft.error && <><span role="alert" className="text-error">{draft.error}</span><button onClick={() => void draft.flush()}>重试保存</button><button onClick={() => { if (window.confirm('放弃本地未保存内容并加载服务器版本？')) void draft.reload(); }}>放弃本地草稿并刷新</button></>}
+      </div>}
+      {actionError && <div role="alert" className="text-error text-sm px-4 py-2">{actionError}<button className="ml-3" onClick={() => setActionError('')}>关闭</button></div>}
+      {showHistory && selectedNode && <HistoryPanel node={selectedNode} beforeAction={draft.flush} onChanged={applySavedNode} />}
+      {draftReview && <ContentDraftReview draft={draftReview} onClose={() => setDraftReview(null)} onApplied={node => { nodeDraftStore.receive(node); applySavedNode(node); setDraftReview(null); setCompletenessRefreshKey(k => k + 1); }} />}
       {/* Tab 内容：版本树 / 编辑器 / Diff 对比 */}
-      {activeTab === '编辑器' ? (
+      {activeTab === '回收站' ? <TrashPanel onChanged={() => onTreeRefresh?.()} /> : activeTab === '编辑器' ? (
         // US-8：编辑器 Tab = 模板选择器 + 工具栏 + 简历预览
         <div className="flex-1 flex flex-col overflow-hidden">
-          {/* US-17: 上游变更提示 + 展开面板 */}
+          {/* US-33: 内容级上游变更提示 + 展开审阅 */}
           {upstreamChanges?.has_upstream_update && (
             <div className="border-b border-orange-200 bg-orange-50">
-              {/* 提示条 */}
               <div className="px-4 py-2 flex items-center gap-2">
                 <span className="w-2 h-2 bg-orange-500 rounded-full flex-shrink-0 animate-pulse" />
                 <span className="text-xs text-orange-700">
-                  上游有 {upstreamChanges.count} 项个人信息变更待合并
+                  上游有 {upstreamChanges.count} 项内容变更待审阅
                 </span>
                 <button
                   onClick={() => setShowUpstreamPanel(!showUpstreamPanel)}
@@ -457,94 +449,8 @@ export default function CenterPanel({
                   {showUpstreamPanel ? '收起 ▲' : '查看变更 ▼'}
                 </button>
               </div>
-              {/* 展开的变更列表 */}
               {showUpstreamPanel && (
-                <div className="px-4 pb-3 space-y-2">
-                  {Object.entries(upstreamChanges.changes).map(([field, change]) => {
-                    const fieldLabel = field === 'contact' ? '联系方式' : field === 'education' ? '教育背景' : field === 'summary' ? '自我评价' : field;
-                    const oldVal = change.old;
-                    const newVal = change.new;
-
-                    // 对象类型（contact / education）：字段级表格渲染
-                    const isObject = (v: unknown) => v !== null && typeof v === 'object';
-                    const isObjectDiff = isObject(oldVal) || isObject(newVal);
-                    const oldObj = (oldVal && typeof oldVal === 'object' ? oldVal : {}) as Record<string, unknown>;
-                    const newObj = (newVal && typeof newVal === 'object' ? newVal : {}) as Record<string, unknown>;
-                    const allKeys = Array.from(new Set([...Object.keys(oldObj), ...Object.keys(newObj)]));
-
-                    // 字段名中文映射
-                    const fieldNames: Record<string, string> = {
-                      name: '姓名', gender: '性别', birth_date: '出生年月', phone: '电话',
-                      email: '邮箱', location: '所在城市', website: '个人网站',
-                      github: 'GitHub', linkedin: 'LinkedIn',
-                      school: '学校', degree: '学历', major: '专业', start_date: '开始', end_date: '结束',
-                    };
-
-                    return (
-                      <div key={field} className="bg-white rounded-md border border-orange-200 p-2.5 space-y-1.5">
-                        <div className="flex items-center justify-between">
-                          <div className="text-xs font-medium text-text-primary">{fieldLabel}</div>
-                          {/* US-18: 逐字段接受/拒绝按钮 */}
-                          <div className="flex gap-1">
-                            <button
-                              onClick={() => handleMergeField(field)}
-                              className="px-2 py-0.5 text-[10px] font-medium text-white bg-green-500 hover:bg-green-600 rounded transition-colors"
-                            >
-                              接受
-                            </button>
-                            <button
-                              onClick={() => handleRejectField(field)}
-                              className="px-2 py-0.5 text-[10px] font-medium text-text-secondary bg-gray-100 hover:bg-gray-200 rounded transition-colors"
-                            >
-                              拒绝
-                            </button>
-                          </div>
-                        </div>
-                        {isObjectDiff ? (
-                          <div className="space-y-0.5">
-                            {allKeys.map((key) => {
-                              const ov = oldObj[key];
-                              const nv = newObj[key];
-                              const changed = JSON.stringify(ov) !== JSON.stringify(nv);
-                              return (
-                                <div key={key} className={`flex items-center gap-2 px-2 py-0.5 rounded-sm text-xs ${changed ? 'bg-orange-50' : ''}`}>
-                                  <span className="text-text-muted w-16 flex-shrink-0">{fieldNames[key] ?? key}</span>
-                                  {changed ? (
-                                    <>
-                                      <span className="text-error line-through flex-1">{String(ov ?? '')}</span>
-                                      <span className="text-text-muted">→</span>
-                                      <span className="text-success flex-1">{String(nv ?? '')}</span>
-                                    </>
-                                  ) : (
-                                    <span className="text-text-tertiary flex-1">{String(nv ?? '')}</span>
-                                  )}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        ) : (
-                          <div className="flex items-start gap-2">
-                            <div className="flex-1">
-                              <span className="text-[10px] text-error mr-1">旧:</span>
-                              <span className="text-xs text-text-tertiary line-through">{String(oldVal ?? '')}</span>
-                            </div>
-                            <span className="text-text-muted text-xs">→</span>
-                            <div className="flex-1">
-                              <span className="text-[10px] text-success mr-1">新:</span>
-                              <span className="text-xs text-text-primary">{String(newVal ?? '')}</span>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                  <button
-                    onClick={handleMergeAll}
-                    className="w-full py-2 text-xs font-medium text-white bg-orange-500 hover:bg-orange-600 rounded-md transition-colors"
-                  >
-                    全部接受合并
-                  </button>
-                </div>
+                <UpstreamReview snapshot={upstreamChanges} source={upstreamChanges.source_node_id ?? '上游节点'} busy={upstreamBusy} stale={draft.status === 'conflict'} onRefresh={() => { if (selectedNode) void refreshUpstream(selectedNode.node_id); }} onAction={(action, field) => void handleUpstreamAction(action, field)} />
               )}
             </div>
           )}
@@ -593,7 +499,7 @@ export default function CenterPanel({
             nodeId={selectedNode?.node_id ?? null}
             refreshKey={completenessRefreshKey}
           />
-          <div className="flex-1 overflow-y-auto p-4 bg-bg-secondary">
+          <div className="flex-1 overflow-y-auto p-4 bg-bg-secondary" onCompositionStart={() => draft.setComposing(true)} onCompositionEnd={() => draft.setComposing(false)}>
             <ResumePreview
               resumeData={previewData}
               templateId={templateId}
@@ -619,7 +525,7 @@ export default function CenterPanel({
             />
             <NodeDetailPanel
               node={selectedNode}
-              onClose={() => setSelectedNode(null)}
+              onClose={async () => { if (await draft.flush()) { setSelectedNode(null); onNodeSelect?.(null); } }}
             />
           </div>
 
@@ -680,7 +586,7 @@ export default function CenterPanel({
             </button>
             <button
               onClick={handleDeleteNode}
-              disabled={!selectedNode}
+              disabled={!selectedNode || selectedNode.node_type === 'master'}
               className="inline-flex items-center gap-2 px-5 py-2 bg-transparent text-text-secondary text-sm font-medium border border-border-default rounded-md cursor-pointer transition-all font-body hover:border-border-strong hover:text-text-primary hover:bg-bg-hover disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <svg

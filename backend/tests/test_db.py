@@ -28,7 +28,7 @@ def test_init_is_idempotent(tmp_db_path: Path) -> None:
     init_database(tmp_db_path)
     init_database(tmp_db_path)
     tables = set(list_tables(tmp_db_path))
-    assert len(tables & set(TABLES)) == 4
+    assert set(TABLES) <= tables
 
 
 def test_seed_master_node(tmp_db_path: Path) -> None:

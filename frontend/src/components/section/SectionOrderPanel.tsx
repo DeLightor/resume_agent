@@ -2,11 +2,11 @@
 // US-13: 简历段落排序面板
 // - 拖拽排序（HTML5 Drag API，不引入新依赖）
 // - 显示/隐藏开关
-// - 防抖保存 500ms
+// - 共享节点草稿队列 800ms
 // - 节点切换时重新加载
 
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { getSectionOrder, updateSectionOrder } from '@/lib/api';
+import { useState, useRef } from 'react';
+import { useNodeDraftById } from '@/hooks/useNodeDraft';
 import type { SectionItem } from '@/types/section';
 
 interface SectionOrderPanelProps {
@@ -15,61 +15,40 @@ interface SectionOrderPanelProps {
   onOrderUpdated?: (sections: SectionItem[]) => void;
 }
 
-type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
+const defaultSections: SectionItem[] = [
+  { key: 'summary', title: '自我评价', visible: true },
+  { key: 'experience', title: '工作经历', visible: true },
+  { key: 'projects', title: '项目经历', visible: true },
+  { key: 'skills', title: '技能总结', visible: true },
+  { key: 'education', title: '教育背景', visible: true },
+  { key: 'awards', title: '获奖经历', visible: false },
+  { key: 'publications', title: '论文/专利', visible: false },
+  { key: 'certificates', title: '证书', visible: false },
+];
+function sectionItems(value: unknown): SectionItem[] {
+  const sections: SectionItem[] = [];
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const base = defaultSections.find(section => section.key === item?.key);
+      if (base && !sections.some(section => section.key === base.key)) {
+        sections.push({ ...base, title: typeof item.title === 'string' ? item.title : base.title, visible: item.visible !== false });
+      }
+    }
+  }
+  for (const item of defaultSections) if (!sections.some(section => section.key === item.key)) sections.push({ ...item });
+  return sections;
+}
 
 export default function SectionOrderPanel({ nodeId, onOrderUpdated }: SectionOrderPanelProps) {
-  const [sections, setSections] = useState<SectionItem[]>([]);
-  const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
-  const [loading, setLoading] = useState(false);
+  const draft = useNodeDraftById(nodeId);
+  const { status: saveStatus, loading } = draft;
+  const sections = sectionItems(draft.content?.section_order);
   const [collapsed, setCollapsed] = useState(false);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const skipNextSave = useRef(false);
   const dragIndex = useRef<number | null>(null);
-
-  // 节点切换时加载
-  useEffect(() => {
-    if (!nodeId) {
-      setSections([]);
-      return;
-    }
-
-    setLoading(true);
-    getSectionOrder(nodeId)
-      .then((data) => {
-        setSections(data);
-        skipNextSave.current = true;
-      })
-      .catch(() => setSections([]))
-      .finally(() => setLoading(false));
-
-    return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-    };
-  }, [nodeId]);
-
-  // 防抖保存
-  const triggerSave = useCallback(
-    (newSections: SectionItem[]) => {
-      if (!nodeId || skipNextSave.current) {
-        skipNextSave.current = false;
-        return;
-      }
-
-      setSaveStatus('saving');
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-      debounceRef.current = setTimeout(async () => {
-        try {
-          await updateSectionOrder(nodeId, newSections);
-          setSaveStatus('saved');
-          onOrderUpdated?.(newSections);
-          setTimeout(() => setSaveStatus('idle'), 1500);
-        } catch {
-          setSaveStatus('error');
-        }
-      }, 500);
-    },
-    [nodeId],
-  );
+  function triggerSave(newSections: SectionItem[]) {
+    draft.edit(content => { content.section_order = newSections; });
+    onOrderUpdated?.(newSections);
+  }
 
   // 拖拽排序
   function handleDragStart(idx: number) {
@@ -84,7 +63,6 @@ export default function SectionOrderPanel({ nodeId, onOrderUpdated }: SectionOrd
     newSections.splice(dragIndex.current, 1);
     newSections.splice(idx, 0, dragged);
     dragIndex.current = idx;
-    setSections(newSections);
     triggerSave(newSections);
   }
 
@@ -97,7 +75,6 @@ export default function SectionOrderPanel({ nodeId, onOrderUpdated }: SectionOrd
     const newSections = sections.map((s, i) =>
       i === idx ? { ...s, visible: !s.visible } : s,
     );
-    setSections(newSections);
     triggerSave(newSections);
   }
 
@@ -107,6 +84,8 @@ export default function SectionOrderPanel({ nodeId, onOrderUpdated }: SectionOrd
 
   const statusText = {
     idle: '',
+    pending: '待保存…',
+    conflict: '版本冲突',
     saving: '保存中...',
     saved: '已保存',
     error: '保存失败',
@@ -156,6 +135,12 @@ export default function SectionOrderPanel({ nodeId, onOrderUpdated }: SectionOrd
         </svg>
       </button>
 
+      {(draft.error || draft.loadError) && <div role="alert" className="px-3 py-2 text-xs text-error">
+        {draft.error || draft.loadError}
+        {draft.loadError ? <button onClick={() => void draft.retryLoad()} className="ml-2 underline">重试加载</button>
+          : saveStatus === 'conflict' ? <button onClick={() => { if (window.confirm('重新加载将丢弃本地未保存草稿，是否继续？')) void draft.reload(); }} className="ml-2 underline">重新加载服务端版本</button>
+          : <button onClick={() => void draft.flush()} className="ml-2 underline">重试保存</button>}
+      </div>}
       {!collapsed && (
         <div className="px-3 pb-3 space-y-1">
           {loading ? (
@@ -171,7 +156,7 @@ export default function SectionOrderPanel({ nodeId, onOrderUpdated }: SectionOrd
               </svg>
             </div>
           ) : (
-            sections.map((section, idx) => (
+            (draft.content ? sections : []).map((section, idx) => (
               <div
                 key={section.key}
                 draggable

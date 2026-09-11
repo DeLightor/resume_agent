@@ -6,6 +6,7 @@ import type { TreeData } from '@/types/tree';
 export const mockTree: TreeData = {
   nodes: [
     {
+      version: 0,
       id: 'master',
       node_id: 'master',
       parent_id: null,
@@ -15,6 +16,7 @@ export const mockTree: TreeData = {
       direction: null,
     },
     {
+      version: 0,
       id: 'branch-security',
       node_id: 'security',
       parent_id: 'master',
@@ -24,6 +26,7 @@ export const mockTree: TreeData = {
       direction: '安全',
     },
     {
+      version: 0,
       id: 'branch-algorithm',
       node_id: 'algorithm',
       parent_id: 'master',
@@ -33,6 +36,7 @@ export const mockTree: TreeData = {
       direction: '算法',
     },
     {
+      version: 0,
       id: 'company-tencent-rs',
       node_id: 'tencent-researcher',
       parent_id: 'security',
@@ -41,6 +45,7 @@ export const mockTree: TreeData = {
       company: 'Tencent',
     },
     {
+      version: 0,
       id: 'company-bytedance-sec',
       node_id: 'bytedance-security',
       parent_id: 'security',
@@ -49,6 +54,7 @@ export const mockTree: TreeData = {
       company: 'ByteDance',
     },
     {
+      version: 0,
       id: 'company-bytedance-algo',
       node_id: 'bytedance-algorithm',
       parent_id: 'algorithm',

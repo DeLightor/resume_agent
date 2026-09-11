@@ -92,6 +92,47 @@ def test_build_deduplicates_existing_branch(initialized_db: Path) -> None:
     assert content["basic"]["name"] == "李四"
 
 
+def test_reimported_branch_refreshes_direct_child_upstream_changes(
+    initialized_db: Path,
+) -> None:
+    """重复导入方向简历后，直属公司节点应收到内容级上游待审阅项。"""
+    builder = TreeBuilder(db_path=initialized_db)
+    first = builder.build_from_resume(_make_resume(company="Tencent", name="张三"))
+    parent = first["node"]
+    parent_content = parent["content_json"]
+    with get_connection(initialized_db) as conn:
+        conn.execute(
+            """
+            INSERT INTO resume_versions
+            (id, node_id, parent_id, node_type, title, company, content_json,
+             upstream_baseline_json, upstream_source_id, upstream_source_version)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "company-id",
+                "company-node",
+                parent["node_id"],
+                "company",
+                "腾讯定制版",
+                "Tencent",
+                parent_content,
+                parent_content,
+                parent["node_id"],
+                parent["version"],
+            ),
+        )
+
+    builder.build_from_resume(_make_resume(company="Alibaba", name="李四"))
+
+    with get_connection(initialized_db) as conn:
+        child = conn.execute(
+            "SELECT has_upstream_update, upstream_changes FROM resume_versions WHERE node_id=?",
+            ("company-node",),
+        ).fetchone()
+    assert child["has_upstream_update"] == 1
+    assert "contact" in json.loads(child["upstream_changes"])
+
+
 def test_build_creates_separate_branch_for_different_direction(
     initialized_db: Path,
 ) -> None:

@@ -11,10 +11,12 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Header
 from pydantic import BaseModel
 
+from resume_agent.api.personal_info import _save_node_content, _write_version
 from resume_agent.api.response import error, success
+from resume_agent.services.node_content import get_node_content as _get_node_content
 
 logger = logging.getLogger("resume_agent")
 
@@ -47,41 +49,6 @@ class SectionOrder(BaseModel):
     sections: list[SectionItem]
 
 
-def _get_node_content(node_id: str) -> dict[str, Any] | None:
-    """获取节点 content_json。"""
-    import json
-
-    from resume_agent.db.connection import get_connection
-
-    with get_connection() as conn:
-        row = conn.execute(
-            "SELECT content_json FROM resume_versions WHERE node_id = ?",
-            [node_id],
-        ).fetchone()
-    if not row:
-        return None
-    raw = row["content_json"]
-    if not raw:
-        return {}
-    try:
-        return json.loads(raw) if isinstance(raw, str) else raw
-    except (json.JSONDecodeError, TypeError):
-        return {}
-
-
-def _save_node_content(node_id: str, content: dict[str, Any]) -> bool:
-    """保存节点 content_json。"""
-    import json
-
-    from resume_agent.db.connection import get_connection
-
-    with get_connection() as conn:
-        content_str = json.dumps(content, ensure_ascii=False)
-        cursor = conn.execute(
-            "UPDATE resume_versions SET content_json = ? WHERE node_id = ?",
-            [content_str, node_id],
-        )
-    return cursor.rowcount > 0
 
 
 @router.get("/tree/node/{node_id}/section-order")
@@ -96,7 +63,7 @@ async def get_section_order(node_id: str) -> dict[str, Any]:
 
     sections = content.get("section_order")
     if not sections or not isinstance(sections, list):
-        return success({"sections": DEFAULT_SECTION_ORDER})
+        return success({"sections": DEFAULT_SECTION_ORDER, "version": content["version"]})
 
     # 校验并补全
     valid_keys = {s["key"] for s in DEFAULT_SECTION_ORDER}
@@ -116,12 +83,12 @@ async def get_section_order(node_id: str) -> dict[str, Any]:
         if default_s["key"] not in seen_keys:
             result.append(default_s)
 
-    return success({"sections": result})
+    return success({"sections": result, "version": content["version"]})
 
 
 @router.put("/tree/node/{node_id}/section-order")
 async def update_section_order(
-    node_id: str, order: SectionOrder
+    node_id: str, order: SectionOrder, if_match: str | None = Header(default=None)
 ) -> dict[str, Any]:
     """更新节点的段落顺序。"""
     content = _get_node_content(node_id)
@@ -129,7 +96,7 @@ async def update_section_order(
         return error("NODE_NOT_FOUND", f"节点 {node_id} 不存在")
 
     content["section_order"] = [s.model_dump() for s in order.sections]
-    if not _save_node_content(node_id, content):
+    if not _save_node_content(node_id, content, expected_version=_write_version(if_match)):
         return error("UPDATE_FAILED", "保存段落顺序失败")
 
-    return success({"sections": content["section_order"]})
+    return success({"sections": content["section_order"], "version": content["version"]})
