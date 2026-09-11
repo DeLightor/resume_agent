@@ -16,7 +16,7 @@ def _run(coro: Any) -> Any:
 
 
 def test_registry_contains_all_tools() -> None:
-    """9 个工具全部注册，schema 合法。"""
+    """11 个工具全部注册，schema 合法。"""
     registry = build_registry()
     names = {tc["function"]["name"] for tc in registry.schemas()}
     assert names == {
@@ -28,6 +28,8 @@ def test_registry_contains_all_tools() -> None:
         "list_templates",
         "export_pdf",
         "web_search",
+        "delete_memory",
+        "list_memories",
         ASK_USER_TOOL_NAME,
     }
     # ask_user schema 必须含 question 参数描述

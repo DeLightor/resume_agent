@@ -159,3 +159,20 @@ CREATE TABLE IF NOT EXISTS tree_events (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_tree_events_id ON tree_events(id);
+
+-- ========================================
+-- 7. agent_memories：Agent 长期记忆（US-35 agent-long-term-memory）
+-- ========================================
+CREATE TABLE IF NOT EXISTS agent_memories (
+    id              TEXT PRIMARY KEY,           -- UUID v4
+    type            TEXT NOT NULL CHECK (type IN ('preference', 'correction', 'style_sample')),
+    content         TEXT NOT NULL,              -- 记忆规则内容
+    source          TEXT DEFAULT 'auto_inferred', -- auto_inferred / manual
+    session_id      TEXT,                       -- 来源会话 ID
+    active          INTEGER NOT NULL DEFAULT 1, -- 0/1: 是否生效
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_memories_active ON agent_memories(active, updated_at DESC);
+

@@ -22,6 +22,7 @@ TABLES: tuple[str, ...] = (
     "knowledge_chunks",
     "upload_records",
     "parse_tasks",
+    "agent_memories",
 )
 
 

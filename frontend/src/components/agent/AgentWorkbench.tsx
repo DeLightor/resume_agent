@@ -5,11 +5,13 @@
 // 底部输入区。ask_user 暂停时时间线内嵌问题卡片。
 // 状态管理见 hooks/useAgentChat。
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAgentChat } from '@/hooks/useAgentChat';
 import type { TimelineItem } from '@/hooks/useAgentChat';
 import type { TimelineEvent } from '@/hooks/useAgentChat';
 import type { ReviewIssue } from '@/types/agent';
+import { getMemories } from '@/lib/api';
+import MemoryDrawer from './MemoryDrawer';
 
 /** US-30: 审查问题类型的中文标签 */
 const ISSUE_TYPE_LABELS: Record<string, string> = {
@@ -36,6 +38,10 @@ function eventTitle(event: TimelineEvent): string {
       return '需要你的输入';
     case 'review':
       return `内容审查（第 ${event.round} 轮）`;
+    case 'memory_created':
+      return '沉淀长期记忆';
+    case 'memory_deleted':
+      return '移除长期记忆';
     case 'done':
       return event.status === 'awaiting_user' ? '等待你的回答' : '完成';
     case 'error':
@@ -43,7 +49,7 @@ function eventTitle(event: TimelineEvent): string {
     case 'assistant_message':
       return 'AI 回复';
     default:
-      return event.type;
+      return (event as { type: string }).type;
   }
 }
 
@@ -60,6 +66,10 @@ function eventDotCls(event: TimelineEvent): string {
       return 'bg-amber-500';
     case 'review':
       return event.passed ? 'bg-emerald-500' : 'bg-amber-500';
+    case 'memory_created':
+      return 'bg-purple-500';
+    case 'memory_deleted':
+      return 'bg-rose-500';
     case 'done':
       return 'bg-emerald-500';
     case 'error':
@@ -229,6 +239,42 @@ function SimpleTimelineItem({ item }: { item: TimelineItem }) {
     body = (
       <p className="text-sm text-red-600 mt-1 ml-4">{event.message}</p>
     );
+  } else if (event.type === 'memory_created') {
+    const mem = event.memory;
+    const typeLabel =
+      mem.type === 'correction' ? '纠偏' : mem.type === 'style_sample' ? '风格' : '偏好';
+    const tagCls =
+      mem.type === 'correction'
+        ? 'bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300'
+        : mem.type === 'style_sample'
+          ? 'bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-300'
+          : 'bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300';
+
+    body = (
+      <div className="mt-1.5 ml-4 p-2.5 rounded-lg bg-bg-secondary border border-border-default text-xs flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${tagCls}`}>
+            {typeLabel}
+          </span>
+          <span className="text-text-primary font-medium">{mem.content}</span>
+        </div>
+        <span className="text-[10px] text-text-muted shrink-0">已沉淀入库</span>
+      </div>
+    );
+  } else if (event.type === 'memory_deleted') {
+    body = (
+      <div className="mt-1.5 ml-4 p-2.5 rounded-lg bg-bg-secondary border border-border-default text-xs flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300">
+            已删除
+          </span>
+          <span className="text-text-secondary line-through font-medium">
+            {event.content || event.memory_id || '已移除记忆项'}
+          </span>
+        </div>
+        <span className="text-[10px] text-text-muted shrink-0">已从记忆库清除</span>
+      </div>
+    );
   }
   return (
     <div className="timeline-item">
@@ -294,9 +340,35 @@ export default function AgentWorkbench({
   const [input, setInput] = useState('');
   const [answer, setAnswer] = useState('');
   const [writeFeedback, setWriteFeedback] = useState('');
+  const [memoryDrawerOpen, setMemoryDrawerOpen] = useState(false);
+  const [activeMemoryCount, setActiveMemoryCount] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   /** pendingAsk 消费中防重入（创建会话是异步的） */
   const consumingAskRef = useRef(false);
+
+  // US-35: 获取并同步生效的长期记忆总数
+  const refreshMemoryCount = useCallback(async () => {
+    try {
+      const data = await getMemories(true);
+      setActiveMemoryCount(data.length);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshMemoryCount();
+  }, [refreshMemoryCount]);
+
+  // 当时间线中产生新记忆或删除记忆事件时自动同步计数
+  useEffect(() => {
+    const hasMemoryEvent = timeline.some(
+      (item) => item.event.type === 'memory_created' || item.event.type === 'memory_deleted'
+    );
+    if (hasMemoryEvent) {
+      void refreshMemoryCount();
+    }
+  }, [timeline, refreshMemoryCount]);
 
   // 新事件到达时滚动到底部
   useEffect(() => {
@@ -394,6 +466,21 @@ export default function AgentWorkbench({
           {phase === 'reconnecting' && (
             <span className="text-amber-600">● 连接中断，正在恢复…</span>
           )}
+
+          {/* US-35: 长期记忆管理抽屉入口 */}
+          <button
+            type="button"
+            onClick={() => setMemoryDrawerOpen(true)}
+            className="ml-auto flex items-center gap-1.5 px-2.5 py-1 rounded bg-bg-primary hover:bg-bg-hover text-text-secondary border border-border-default transition-all duration-200 cursor-pointer text-xs font-medium shadow-2xs hover:text-brand-primary hover:border-brand-primary"
+            title="查看和管理 Agent 长期记忆规则"
+          >
+            <span>🧠 长期记忆</span>
+            {activeMemoryCount > 0 && (
+              <span className="px-1.5 py-0.2 rounded-full bg-brand-primary/10 text-brand-primary font-semibold text-[10px]">
+                {activeMemoryCount}
+              </span>
+            )}
+          </button>
         </div>
 
         {/* 时间线 */}
@@ -590,6 +677,13 @@ export default function AgentWorkbench({
           </div>
         </div>
       </div>
+
+      {/* US-35: 长期记忆管理抽屉 */}
+      <MemoryDrawer
+        isOpen={memoryDrawerOpen}
+        onClose={() => setMemoryDrawerOpen(false)}
+        onMemoryChanged={refreshMemoryCount}
+      />
     </div>
   );
 }

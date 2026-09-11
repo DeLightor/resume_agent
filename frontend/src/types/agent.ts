@@ -98,5 +98,31 @@ export type AgentEvent =
       issues: ReviewIssue[];
       summary: string;
     }
+  /** US-35: 自动沉淀记忆事件 */
+  | {
+      type: 'memory_created';
+      memory: AgentMemory;
+    }
+  /** US-35: 删除长期记忆事件 */
+  | {
+      type: 'memory_deleted';
+      memory_id?: string;
+      content?: string;
+    }
   /** 预留草稿事件 */
   | { type: 'draft'; [key: string]: unknown };
+
+/** US-35: Agent 长期记忆规则类型 */
+export type AgentMemoryType = 'preference' | 'correction' | 'style_sample';
+
+export interface AgentMemory {
+  id: string;
+  type: AgentMemoryType;
+  content: string;
+  source: 'auto_inferred' | 'manual';
+  session_id?: string | null;
+  active: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+

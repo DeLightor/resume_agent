@@ -167,6 +167,32 @@ async def _ask_user(args: dict[str, Any]) -> Any:
     )
 
 
+async def _delete_memory(args: dict[str, Any]) -> dict[str, Any]:
+    """删除长期记忆项（支持按关键词文本检索、按最新记录或按 ID 删除）。"""
+    from resume_agent.agents.memory_store import search_and_delete_memory
+
+    query = str(args.get("query", "")).strip() if args.get("query") is not None else None
+    memory_id = str(args.get("memory_id", "")).strip() if args.get("memory_id") is not None else None
+    db_path = args.get("db_path")
+    return search_and_delete_memory(query=query, memory_id=memory_id, db_path=db_path)
+
+
+async def _list_memories(args: dict[str, Any]) -> dict[str, Any]:
+    """列出用户的长期记忆规则列表。"""
+    from resume_agent.agents.memory_store import list_memories
+
+    active_only = bool(args.get("active_only", False))
+    type_filter = args.get("type")
+    db_path = args.get("db_path")
+    memories = list_memories(active_only=active_only, type_filter=type_filter, db_path=db_path)
+    return {
+        "ok": True,
+        "memories": [m.to_dict() for m in memories],
+        "count": len(memories),
+    }
+
+
+
 def build_registry() -> ToolRegistry:
     """构建注册了全部内置工具的注册表。"""
     registry = ToolRegistry()
@@ -347,6 +373,49 @@ def build_registry() -> ToolRegistry:
             "required": ["question"],
         },
         execute=_ask_user,
+    ))
+
+    registry.register(ToolSpec(
+        name="delete_memory",
+        description=(
+            "删除用户的某条个性化长期记忆规则（偏好、纠偏或风格）。支持三种方式："
+            "1. 传入 query 关键词或文字片段（如「不要写精通」、「突出高并发」），工具会自动检索并删除匹配的记忆；"
+            "2. 传入 query='latest' 或 query='刚刚'，工具会自动删除最新添加的一条记忆；"
+            "3. 传入具体的 memory_id 精确删除。"
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "待删除记忆的文字片段、关键词，或 'latest' / '刚刚'（表示最新添加的一条）",
+                },
+                "memory_id": {
+                    "type": "string",
+                    "description": "待删除记忆的 ID（可选，已知时传入）",
+                },
+            },
+        },
+        execute=_delete_memory,
+    ))
+
+    registry.register(ToolSpec(
+        name="list_memories",
+        description="查看当前已保存的所有个性化偏好、纠偏和风格等长期记忆规则列表。",
+        parameters={
+            "type": "object",
+            "properties": {
+                "active_only": {
+                    "type": "boolean",
+                    "description": "是否仅返回当前生效中的记忆，默认 false（查看全部）",
+                },
+                "type": {
+                    "type": "string",
+                    "description": "按类型过滤：preference（偏好）/ correction（纠偏）/ style_sample（风格）",
+                },
+            },
+        },
+        execute=_list_memories,
     ))
 
     return registry

@@ -25,11 +25,13 @@ _FAKE_SEARCH_RESOURCES: list[dict[str, str]] = [
 
 @pytest.fixture(autouse=True)
 def _mock_tavily(monkeypatch: pytest.MonkeyPatch) -> None:
-    """屏蔽真实 Tavily 调用（防配额消耗与外部状态导致的测试漂移）。"""
+    """屏蔽真实 Tavily 调用与 LLM 外部调用（防配额消耗与外部状态导致的测试漂移与卡顿）。"""
     monkeypatch.setattr(
         "resume_agent.tools.tavily_search.search_skill_resources",
         lambda skill: list(_FAKE_SEARCH_RESOURCES),
     )
+    _mock_llm(monkeypatch, None)
+
 
 
 def _mock_llm(monkeypatch: pytest.MonkeyPatch, response: str | None) -> None:
