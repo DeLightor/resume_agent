@@ -66,3 +66,5 @@ temp/
 contest/
 .playwright-cli/
 
+# === Local agent configuration and skills (do not commit) ===
+.agents/
