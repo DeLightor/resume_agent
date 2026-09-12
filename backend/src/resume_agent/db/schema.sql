@@ -193,4 +193,48 @@ CREATE TABLE IF NOT EXISTS material_mining_sessions (
 
 CREATE INDEX IF NOT EXISTS idx_mining_sessions_status ON material_mining_sessions(status, updated_at DESC);
 
+-- ========================================
+-- 9. application_records / application_events：投递追踪（US-37）
+-- ========================================
+CREATE TABLE IF NOT EXISTS application_records (
+    id                   TEXT PRIMARY KEY,
+    resume_node_id       TEXT NOT NULL,
+    resume_node_title    TEXT NOT NULL,
+    resume_version       INTEGER NOT NULL,
+    resume_snapshot_json TEXT NOT NULL,
+    company              TEXT NOT NULL,
+    role                 TEXT NOT NULL,
+    job_url              TEXT,
+    jd_snapshot_json     TEXT,
+    status               TEXT NOT NULL DEFAULT 'draft'
+                         CHECK (status IN ('draft', 'applied', 'hr_screen', 'interview', 'offer', 'rejected', 'withdrawn')),
+    next_action          TEXT,
+    follow_up_at         TEXT,
+    notes                TEXT,
+    version              INTEGER NOT NULL DEFAULT 0,
+    deleted_at           TEXT,
+    created_at           TEXT NOT NULL,
+    updated_at           TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_applications_live_status_updated
+    ON application_records(deleted_at, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_applications_follow_up_at
+    ON application_records(follow_up_at);
+
+CREATE TABLE IF NOT EXISTS application_events (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    application_id      TEXT NOT NULL,
+    event_type          TEXT NOT NULL
+                        CHECK (event_type IN ('created', 'status_changed', 'updated', 'deleted', 'restored')),
+    from_status         TEXT,
+    to_status           TEXT,
+    note                TEXT,
+    changed_fields_json TEXT NOT NULL DEFAULT '[]',
+    created_at          TEXT NOT NULL,
+    FOREIGN KEY (application_id) REFERENCES application_records(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_application_events_application_id
+    ON application_events(application_id, id);
 

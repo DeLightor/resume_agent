@@ -10,6 +10,7 @@ const NAV_TABS: { label: string; view: ActiveView; collapseRight?: boolean }[] =
   { label: '总览面板', view: 'version-tree', collapseRight: false },
   { label: '简历版本分支', view: 'version-tree', collapseRight: true },
   { label: '知识库', view: 'knowledge', collapseRight: false },
+  { label: '投递追踪', view: 'applications', collapseRight: true },
   { label: 'AI 助手', view: 'agent', collapseRight: true },
 ];
 
@@ -35,6 +36,8 @@ export default function GlobalToolbar({
   const activeLabel =
     activeView === 'knowledge'
       ? '知识库'
+      : activeView === 'applications'
+        ? '投递追踪'
       : activeView === 'agent'
         ? 'AI 助手'
         : rightPanelCollapsed

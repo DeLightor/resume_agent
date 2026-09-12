@@ -4,7 +4,7 @@
 //       有结果时显示 JDCard + "重新分析"按钮。
 // US-5：Gap 报告区域接入 GapReportView（基于 JD 结构化数据 + 知识库语义比对）。
 
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import JDUploadZone from '@/components/jd/JDUploadZone';
 import JDCard from '@/components/jd/JDCard';
 import GapReportView from '@/components/gap/GapReportView';
@@ -71,6 +71,10 @@ export default function RightPanel({
     onJDAnalyzed?.(result.structured ? { ...result.structured } : null);
   }
 
+  const handleStructuredChange = useCallback((structured: JDAnalysisResult['structured']) => {
+    onJDAnalyzed?.({ ...structured });
+  }, [onJDAnalyzed]);
+
   function handleReset() {
     setJdResult(null);
     onGapReport(null);
@@ -123,7 +127,7 @@ export default function RightPanel({
         {/* 无分析结果：上传区；有结果：结构化卡片 + 重新分析 */}
         {jdResult ? (
           <div className="flex flex-col gap-2">
-            <JDCard result={jdResult} />
+            <JDCard result={jdResult} onStructuredChange={handleStructuredChange} />
             <button
               type="button"
               onClick={handleReset}

@@ -2,7 +2,7 @@
 // 知识库 RAG 相关类型：文档 / 统计 / 检索结果 / 上传响应
 
 /** 中栏视图切换（US-3 引入知识库视图） */
-export type ActiveView = 'version-tree' | 'knowledge' | 'agent';
+export type ActiveView = 'version-tree' | 'knowledge' | 'agent' | 'applications';
 
 /** 知识库文档解析状态 */
 export type KnowledgeParseStatus =
