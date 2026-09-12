@@ -38,6 +38,15 @@ import type {
   AgentSessionDetail,
   AgentSessionSummary,
 } from '@/types/agent';
+import type {
+  CommitMiningResultResponse,
+  CreateMiningSessionParams,
+  MaterialMiningSession,
+  MiningTemplate,
+  SubmitMiningAnswerParams,
+  SubmitMiningAnswerResponse,
+  SynthesizeMiningResultResponse,
+} from '@/types/mining';
 
 const BASE_URL = '/api';
 
@@ -755,4 +764,44 @@ export const updateMemory = (
 
 export const deleteMemory = (id: string) =>
   api.del<{ deleted: boolean }>(`/agent/memories/${encodeURIComponent(id)}`);
+
+// ===== US-36: 素材挖掘 API =====
+
+export const getMiningTemplates = () =>
+  api.get<MiningTemplate[]>('/mining/templates');
+
+export const createMiningSession = (data: CreateMiningSessionParams) =>
+  api.post<MaterialMiningSession>('/mining/sessions', data);
+
+export const getMiningSessions = (status?: string) => {
+  const qs = status ? `?status=${encodeURIComponent(status)}` : '';
+  return api.get<MaterialMiningSession[]>(`/mining/sessions${qs}`);
+};
+
+export const getMiningSession = (id: string) =>
+  api.get<MaterialMiningSession>(`/mining/sessions/${encodeURIComponent(id)}`);
+
+export const submitMiningAnswer = (id: string, data: SubmitMiningAnswerParams) =>
+  api.post<SubmitMiningAnswerResponse>(
+    `/mining/sessions/${encodeURIComponent(id)}/answer`,
+    data,
+  );
+
+export const synthesizeMiningResult = (id: string, checkDuplicate = true) =>
+  api.post<SynthesizeMiningResultResponse>(
+    `/mining/sessions/${encodeURIComponent(id)}/synthesize`,
+    {
+      check_duplicate: checkDuplicate,
+    },
+  );
+
+export const commitMiningToKnowledge = (id: string) =>
+  api.post<CommitMiningResultResponse>(
+    `/mining/sessions/${encodeURIComponent(id)}/commit`,
+  );
+
+export const deleteMiningSession = (id: string) =>
+  api.del<{ deleted: boolean; id: string }>(
+    `/mining/sessions/${encodeURIComponent(id)}`,
+  );
 

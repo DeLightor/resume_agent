@@ -664,12 +664,13 @@ def _apply_personal_info_override(
 
 @router.get("/list")
 def list_resumes() -> dict[str, Any]:
-    """列出所有上传记录。"""
+    """列出所有上传简历记录（排除纯知识素材文件）。"""
     with get_connection() as conn:
         records = conn.execute(
             """
             SELECT id, file_name, file_type, file_path, parse_status, direction, created_at
             FROM upload_records
+            WHERE file_path LIKE 'resumes/%'
             ORDER BY created_at DESC
             """
         ).fetchall()

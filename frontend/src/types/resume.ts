@@ -143,6 +143,7 @@ export interface ResumeListItem {
   id: string;
   file_name: string;
   file_type: string;
+  file_path?: string;
   parse_status: ParseStatus;
   direction?: string | null;
   created_at: string;

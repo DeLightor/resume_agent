@@ -18,6 +18,7 @@ from resume_agent.api import (
     jd,
     knowledge,
     memory,
+    mining,
     personal_info,
     resumes,
     section_order,
@@ -53,6 +54,7 @@ api_router.include_router(completeness.router)
 api_router.include_router(upstream.router)
 api_router.include_router(agent.router)
 api_router.include_router(memory.router)
+api_router.include_router(mining.router)
 
 
 __all__ = ["api_router"]

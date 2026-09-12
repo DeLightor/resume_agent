@@ -176,3 +176,21 @@ CREATE TABLE IF NOT EXISTS agent_memories (
 
 CREATE INDEX IF NOT EXISTS idx_agent_memories_active ON agent_memories(active, updated_at DESC);
 
+-- ========================================
+-- 8. material_mining_sessions：应届生素材挖掘会话（US-36 graduate-material-mining）
+-- ========================================
+CREATE TABLE IF NOT EXISTS material_mining_sessions (
+    id              TEXT PRIMARY KEY,           -- UUID v4
+    category        TEXT NOT NULL CHECK (category IN ('course_project', 'competition', 'research', 'club', 'internship')),
+    title           TEXT NOT NULL,              -- 经历标题（如「手写 Mini-Redis」）
+    status          TEXT NOT NULL CHECK (status IN ('in_progress', 'completed', 'abandoned')),
+    current_step    INTEGER NOT NULL DEFAULT 1, -- 1: S(背景), 2: T(难点), 3: A(动作), 4: R(产出), 5: completed
+    context_json    TEXT NOT NULL DEFAULT '{}', -- 阶段性问答记录与草稿
+    star_result_json TEXT,                      -- 提炼出的结构化 STAR 结果
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_mining_sessions_status ON material_mining_sessions(status, updated_at DESC);
+
+
