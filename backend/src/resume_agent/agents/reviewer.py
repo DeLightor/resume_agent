@@ -31,6 +31,7 @@ _REVIEW_DRAFT_PROMPT = """你是 Resume-Agent 的独立简历审查官（Reviewe
 2. cliche（套话）：空洞、缺乏具体事实的表述（如「负责优化系统性能」无量化结果、「精通」「熟练掌握」无佐证）。
 3. jd_coverage（JD 关键词覆盖）：给定目标 JD 时，草稿是否覆盖 JD 的核心关键词？重要缺口需标出。
 4. unverified_number（数字无来源）：草稿中的量化数字（百分比、金额、规模）是否能在证据中找到来源？无来源的数字必须标出。
+5. user_memory_compliance（用户长期偏好与纠偏红线）：草稿是否遵守提供的个性化偏好或触碰纠偏红线？触碰红线（如禁用的词汇、格式要求）必须标出。
 
 判定原则：
 - 证据为空时，knowledge_boundary 与 unverified_number 降级为「无法核验」，不要凭空标红；其余维度照常审查。
@@ -40,7 +41,7 @@ _REVIEW_DRAFT_PROMPT = """你是 Resume-Agent 的独立简历审查官（Reviewe
 {
   "passed": bool,
   "issues": [
-    {"type": "knowledge_boundary/cliche/jd_coverage/unverified_number/other", "message": "具体问题描述"}
+    {"type": "knowledge_boundary/cliche/jd_coverage/unverified_number/user_memory_compliance/other", "message": "具体问题描述"}
   ],
   "summary": "一句话结论"
 }"""
@@ -115,6 +116,8 @@ class ReviewerAgent:
         content: dict[str, Any],
         structured_jd: dict[str, Any] | None,
         evidence: list[dict[str, Any]],
+        db_path: Any | None = None,
+        memories_text: str | None = None,
     ) -> dict[str, Any]:
         """审查待写入草稿。
 
@@ -122,6 +125,8 @@ class ReviewerAgent:
             content: write_node 的草稿内容。
             structured_jd: 会话上下文中的结构化 JD（可为 None）。
             evidence: 知识库检索证据（可为空，边界检查降级）。
+            db_path: 数据库路径（可选，用于检索活跃长期记忆）。
+            memories_text: 显式传入的记忆提示词（可选）。
 
         Returns:
             ``{passed: bool, issues: [{type, message}], summary: str}``；
@@ -130,19 +135,29 @@ class ReviewerAgent:
         if not getattr(self.llm, "configured", False):
             return {"passed": True, "issues": [], "summary": "LLM 未配置，跳过审查"}
 
-        user_content = (
+        active_memory = memories_text
+        if active_memory is None and db_path is not None:
+            from resume_agent.agents.memory_store import get_active_memory_prompt
+
+            active_memory = get_active_memory_prompt(db_path)
+
+        user_content_parts = [
             "待写入草稿（JSON）：\n"
-            + json.dumps(content, ensure_ascii=False, indent=2)
-            + "\n\n目标 JD（JSON）：\n"
+            + json.dumps(content, ensure_ascii=False, indent=2),
+            "目标 JD（JSON）：\n"
             + (
                 json.dumps(structured_jd, ensure_ascii=False, indent=2)
                 if structured_jd
                 else "（无）"
-            )
-            + "\n\n知识库证据：\n"
-            + _format_evidence(evidence)
-            + "\n\n请按审查维度输出 JSON 判定。"
-        )
+            ),
+            "知识库证据：\n" + _format_evidence(evidence),
+        ]
+        if active_memory:
+            user_content_parts.append(active_memory)
+        user_content_parts.append("请按审查维度输出 JSON 判定。")
+
+        user_content = "\n\n".join(user_content_parts)
+
         try:
             response = await self.llm.chat(
                 system_prompt=_REVIEW_DRAFT_PROMPT,

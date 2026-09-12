@@ -33,9 +33,21 @@ import type { PersonalInfo } from '@/types/personal';
 import type { SectionItem } from '@/types/section';
 import type {
   AgentEvent,
+  AgentMemory,
+  AgentMemoryType,
   AgentSessionDetail,
   AgentSessionSummary,
 } from '@/types/agent';
+import type {
+  CommitMiningResultResponse,
+  CreateMiningSessionParams,
+  MaterialMiningSession,
+  MiningTemplate,
+  SubmitMiningAnswerParams,
+  SubmitMiningAnswerResponse,
+  SynthesizeMiningResultResponse,
+  StarResult,
+} from '@/types/mining';
 
 const BASE_URL = '/api';
 
@@ -101,6 +113,12 @@ export const api = {
   put: <T>(endpoint: string, body?: unknown) =>
     apiRequest<T>(endpoint, {
       method: 'PUT',
+      body: body ? JSON.stringify(body) : undefined,
+    }),
+
+  patch: <T>(endpoint: string, body?: unknown) =>
+    apiRequest<T>(endpoint, {
+      method: 'PATCH',
       body: body ? JSON.stringify(body) : undefined,
     }),
 
@@ -717,3 +735,74 @@ export const getNodeHistory = (id: string) => api.get<NodeHistory>(`/tree/node/$
 export const moveNodeHistory = (id: string, direction: 'undo' | 'redo', version: number) => api.post<ResumeNode>(`/tree/node/${encodeURIComponent(id)}/${direction}`, { expected_version: version });
 export const getTrash = () => api.get<{items: TrashItem[]}>('/tree/trash');
 export const restoreNode = (id: string) => api.post(`/tree/node/${encodeURIComponent(id)}/restore`);
+
+// ===== US-35: Agent 长期记忆 API =====
+
+export const getMemories = (activeOnly = false, type?: string) => {
+  const params = new URLSearchParams();
+  if (activeOnly) params.append('active_only', 'true');
+  if (type) params.append('type', type);
+  const qs = params.toString() ? `?${params.toString()}` : '';
+  return api.get<AgentMemory[]>(`/agent/memories${qs}`);
+};
+
+export const createMemory = (data: {
+  content: string;
+  type?: AgentMemoryType;
+  source?: string;
+  session_id?: string | null;
+  active?: boolean;
+}) => api.post<AgentMemory>('/agent/memories', data);
+
+export const updateMemory = (
+  id: string,
+  data: {
+    content?: string;
+    active?: boolean;
+    type?: AgentMemoryType;
+  },
+) => api.patch<AgentMemory>(`/agent/memories/${encodeURIComponent(id)}`, data);
+
+export const deleteMemory = (id: string) =>
+  api.del<{ deleted: boolean }>(`/agent/memories/${encodeURIComponent(id)}`);
+
+// ===== US-36: 素材挖掘 API =====
+
+export const getMiningTemplates = () =>
+  api.get<MiningTemplate[]>('/mining/templates');
+
+export const createMiningSession = (data: CreateMiningSessionParams) =>
+  api.post<MaterialMiningSession>('/mining/sessions', data);
+
+export const getMiningSessions = (status?: string) => {
+  const qs = status ? `?status=${encodeURIComponent(status)}` : '';
+  return api.get<MaterialMiningSession[]>(`/mining/sessions${qs}`);
+};
+
+export const getMiningSession = (id: string) =>
+  api.get<MaterialMiningSession>(`/mining/sessions/${encodeURIComponent(id)}`);
+
+export const submitMiningAnswer = (id: string, data: SubmitMiningAnswerParams) =>
+  api.post<SubmitMiningAnswerResponse>(
+    `/mining/sessions/${encodeURIComponent(id)}/answer`,
+    data,
+  );
+
+export const synthesizeMiningResult = (id: string, checkDuplicate = true) =>
+  api.post<SynthesizeMiningResultResponse>(
+    `/mining/sessions/${encodeURIComponent(id)}/synthesize`,
+    {
+      check_duplicate: checkDuplicate,
+    },
+  );
+
+export const commitMiningToKnowledge = (id: string, starResult?: StarResult) =>
+  api.post<CommitMiningResultResponse>(
+    `/mining/sessions/${encodeURIComponent(id)}/commit`,
+    starResult ? { star_result: starResult } : undefined,
+  );
+
+export const deleteMiningSession = (id: string) =>
+  api.del<{ deleted: boolean; id: string }>(
+    `/mining/sessions/${encodeURIComponent(id)}`,
+  );

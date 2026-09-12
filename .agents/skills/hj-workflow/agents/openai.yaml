@@ -1,0 +1,4 @@
+interface:
+  display_name: "HJ Workflow"
+  short_description: "HJ workflow from idea to merged develop"
+  default_prompt: "Use $hj-workflow to guide this requirement through brainstorm, branch isolation, OpenSpec, TDD implementation, verification, manual smoke testing, archive, and merge to develop."

@@ -16,7 +16,7 @@ from fastapi import APIRouter
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from resume_agent.api.response import error
+from resume_agent.api.response import error, success
 
 logger = logging.getLogger("resume_agent")
 
@@ -45,7 +45,7 @@ async def export_pdf(req: ExportRequest) -> Any:
         PDF 文件响应（application/pdf）。
     """
     from resume_agent.config import settings
-    from resume_agent.export.pdf_builder import build_pdf
+    from resume_agent.export.pdf_builder import build_pdf, get_pdf_page_count
 
     if not req.resume_data:
         return error("INVALID_REQUEST", "resume_data 不能为空")
@@ -57,6 +57,7 @@ async def export_pdf(req: ExportRequest) -> Any:
             company=req.company,
             template_id=req.template_id,
         )
+        page_count = get_pdf_page_count(pdf_bytes)
     except Exception as exc:
         logger.exception("PDF 生成失败")
         return error("EXPORT_FAILED", f"PDF 生成失败: {exc}")
@@ -72,4 +73,36 @@ async def export_pdf(req: ExportRequest) -> Any:
         path=str(file_path),
         media_type="application/pdf",
         filename=f"resume_{req.job_title or 'export'}.pdf",
+        headers={"X-Page-Count": str(page_count)},
     )
+
+
+@router.post("/page_count")
+async def get_page_count(req: ExportRequest) -> Any:
+    """获取 PDF 导出的实际页数。
+
+    Args:
+        req: 导出请求。
+
+    Returns:
+        统一响应格式，包含 page_count。
+    """
+    from resume_agent.export.pdf_builder import build_pdf, get_pdf_page_count
+
+    if not req.resume_data:
+        return error("INVALID_REQUEST", "resume_data 不能为空")
+
+    try:
+        pdf_bytes = build_pdf(
+            resume_data=req.resume_data,
+            job_title=req.job_title,
+            company=req.company,
+            template_id=req.template_id,
+        )
+        page_count = get_pdf_page_count(pdf_bytes)
+    except Exception as exc:
+        logger.exception("PDF 页数计算失败")
+        return error("EXPORT_FAILED", f"PDF 页数计算失败: {exc}")
+
+    return success({"page_count": page_count})
+

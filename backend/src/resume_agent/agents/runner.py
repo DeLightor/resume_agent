@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from resume_agent.agents import store
+from resume_agent.agents import memory_store, store
 from resume_agent.agents.registry import ToolRegistry
 from resume_agent.agents.reviewer import ReviewerAgent
 from resume_agent.config import settings
@@ -33,6 +33,7 @@ from resume_agent.tools.agent_tools import (
 logger = logging.getLogger("resume_agent")
 
 EventCallback = Callable[[dict[str, Any]], Awaitable[None]]
+_MEMORY_SNAPSHOT_PREFIX = "【会话最新记忆规则】"
 
 AGENT_SYSTEM_PROMPT = """你是 Resume-Agent 的简历助理 Agent，帮助用户管理简历、分析 JD、生成与优化简历内容。
 
@@ -45,7 +46,9 @@ AGENT_SYSTEM_PROMPT = """你是 Resume-Agent 的简历助理 Agent，帮助用�
    （不合格会带意见打回，请按意见修改后重新发起，不要原样重发），
    通过后暂停向用户展示待写入内容，用户明确同意后才真正写入；
    被用户拒绝时根据用户反馈调整后重新发起。
-5. 每次回复使用简洁的中文，先给结论再说理由。"""
+5. 每次回复使用简洁的中文，先给结论再说理由。
+6. 关注长期偏好：用户在对话中可能会自然提出个人偏好、工作习惯或红线要求（如「不要写精通」、「突出高并发」），系统会自动沉淀为长期记忆。你在后续回复和简历内容生成中需严格遵守，并在回复中自然响应用户的偏好。
+7. 管理长期记忆：当用户要求删除、撤销或清理某条记忆规则（例如「把刚刚记的xxx删掉」、「删除关于精通的记忆」、「撤销刚才的偏好」）时，主动调用 delete_memory 工具，传入用户提到的关键词或使用 query="latest" 删除刚刚添加的记忆；也可以在不确定时先调用 list_memories 查看已有记忆。删除成功后向用户确认删除结果。"""
 
 # ---------------------------------------------------------------------------
 # write_node 确认词表（agent-write-guard）
@@ -150,6 +153,14 @@ class AgentRunner:
                 "role": "system",
                 "content": AGENT_SYSTEM_PROMPT,
             })
+            active_memory = memory_store.get_active_memory_prompt(self.db_path)
+            if active_memory:
+                # 记忆单独作为可替换快照保存。不能拼进基础 system prompt，
+                # 否则用户删除规则后，正在进行的会话仍会携带过期约束。
+                session.messages.append({
+                    "role": "system",
+                    "content": f"{_MEMORY_SNAPSHOT_PREFIX}\n{active_memory}",
+                })
             if session.context:
                 session.messages.append({
                     "role": "system",
@@ -160,10 +171,48 @@ class AgentRunner:
                 })
 
         if user_message:
-            session.messages.append({
-                "role": "user",
-                "content": user_message,
-            })
+            # US-35: 智能记忆识别与长期记忆沉淀（LLM 语义分析 + 规则兜底，无固定句式限制）
+            try:
+                extracted_list = await memory_store.extract_memories_smart(
+                    self.llm, user_message
+                )
+                for item in extracted_list:
+                    mem_item = memory_store.create_memory(
+                        content=item["content"],
+                        type=item["type"],
+                        source="auto_inferred",
+                        session_id=session.id,
+                        db_path=self.db_path,
+                    )
+                    if on_event:
+                        await self._emit(on_event, {
+                            "type": "memory_created",
+                            "memory": mem_item.to_dict(),
+                        })
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("自动沉淀记忆失败: %s", exc)
+            active_memory = memory_store.get_active_memory_prompt(self.db_path)
+            snapshot_index = next(
+                (
+                    index
+                    for index in range(len(session.messages) - 1, -1, -1)
+                    if session.messages[index].get("role") == "system"
+                    and str(session.messages[index].get("content", "")).startswith(
+                        _MEMORY_SNAPSHOT_PREFIX
+                    )
+                ),
+                None,
+            )
+            if active_memory:
+                snapshot = f"{_MEMORY_SNAPSHOT_PREFIX}\n{active_memory}"
+                if snapshot_index is not None:
+                    session.messages[snapshot_index]["content"] = snapshot
+                else:
+                    session.messages.append({"role": "system", "content": snapshot})
+            elif snapshot_index is not None:
+                # 用户删空全部活跃记忆时，立即撤掉该会话的旧规则。
+                session.messages.pop(snapshot_index)
+            session.messages.append({"role": "user", "content": user_message})
 
         session.status = "running"
         store.save_session(session, self.db_path)
@@ -409,6 +458,10 @@ class AgentRunner:
                         "name": tc_name,
                         "arguments": tc_args,
                     })
+                    # 若涉及数据库路径且 runner 指定了 db_path，透传给工具
+                    if self.db_path and tc_name in ("delete_memory", "list_memories"):
+                        tc_args.setdefault("db_path", str(self.db_path))
+
                     result = await self.registry.execute(tc_name, tc_args)
                     store.append_trace(
                         session_id=session.id,
@@ -425,6 +478,16 @@ class AgentRunner:
                         "name": tc_name,
                         "result": result,
                     })
+
+                    # 若成功删除长期记忆，发射 memory_deleted SSE 事件通知前端
+                    if tc_name == "delete_memory" and isinstance(result, dict) and result.get("ok"):
+                        for del_item in result.get("deleted", []):
+                            await self._emit(on_event, {
+                                "type": "memory_deleted",
+                                "memory_id": del_item.get("id"),
+                                "content": del_item.get("content"),
+                            })
+
                     session.messages.append({
                         "role": "tool",
                         "tool_call_id": tc.id,
@@ -485,8 +548,17 @@ class AgentRunner:
             else None
         )
         try:
+            import inspect
+
+            kwargs: dict[str, Any] = {}
+            sig = inspect.signature(self.reviewer.review_draft)
+            if "db_path" in sig.parameters or any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+            ):
+                kwargs["db_path"] = self.db_path
+
             review = await self.reviewer.review_draft(
-                content, structured_jd, evidence
+                content, structured_jd, evidence, **kwargs
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("Reviewer 审查异常，fail-open 放行: %s", exc)

@@ -499,4 +499,20 @@ def build_pdf(
     return buffer.getvalue()
 
 
-__all__ = ["build_pdf"]
+def get_pdf_page_count(pdf_bytes: bytes) -> int:
+    """获取 PDF 的实际总页数。
+
+    Args:
+        pdf_bytes: PDF 字节流。
+
+    Returns:
+        实际总页数。
+    """
+    import fitz
+
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    return int(doc.page_count)
+
+
+__all__ = ["build_pdf", "get_pdf_page_count"]
+

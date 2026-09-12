@@ -18,6 +18,7 @@ import type {
   KnowledgeParseStatus,
   SearchResult,
 } from '@/types/knowledge';
+import MaterialMiningDrawer from '@/components/knowledge/MaterialMiningDrawer';
 
 interface KnowledgeViewProps {
   /** 变化时重新拉取文档列表（上传 / 删除后递增） */
@@ -104,6 +105,9 @@ export default function KnowledgeView({
   // 删除状态
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
+  // 素材挖掘抽屉状态 (US-36)
+  const [miningDrawerOpen, setMiningDrawerOpen] = useState(false);
+
   /** 拉取文档列表 */
   const fetchDocuments = useCallback(() => {
     setLoading(true);
@@ -111,7 +115,14 @@ export default function KnowledgeView({
     Promise.all([getKnowledgeDocuments(), getResumeList()])
       .then(([data, resumeData]) => {
         setDocuments(data);
-        setResumes(resumeData.filter((item) => item.parse_status === 'success'));
+        setResumes(
+          resumeData.filter(
+            (item) =>
+              item.parse_status === 'success' &&
+              item.direction !== 'chat_mining' &&
+              (!item.file_path || item.file_path.startsWith('resumes/')),
+          ),
+        );
         setLoading(false);
       })
       .catch((err: unknown) => {
@@ -224,30 +235,61 @@ export default function KnowledgeView({
         </div>
       </div>
 
-      <div className="mt-6">
-        <div className="mb-3 text-sm font-semibold text-text-primary">
-          已确认的简历
-          <span className="ml-2 text-xs font-normal text-text-tertiary">· 共 {resumes.length} 份</span>
-        </div>
-        {resumes.length === 0 ? (
-          <div className="rounded-md border border-dashed border-border-default p-4 text-sm text-text-muted">暂无已确认简历</div>
-        ) : (
-          <div className="flex flex-col gap-1">
-            {resumes.map((resume) => (
-              <div key={resume.id} className="flex items-center gap-3 rounded-md border border-border-subtle bg-bg-secondary px-3 py-2.5">
-                <span className="min-w-[36px] rounded bg-bg-tertiary px-1.5 py-0.5 text-center font-mono text-[10px] text-text-secondary">简历</span>
-                <span className="min-w-0 flex-1 truncate text-sm text-text-primary" title={resume.file_name}>{resume.file_name}</span>
-                <span className="text-xs text-brand-primary">{resume.direction || '未指定方向'}</span>
-                <span className="hidden text-xs text-text-muted sm:block">{formatDate(resume.created_at)}</span>
-                <button type="button" className="min-h-8 px-2 text-xs text-error" onClick={async () => { if (window.confirm('删除这份已入库简历？')) { await deleteResume(resume.id); fetchDocuments(); onKnowledgeRefresh?.(); } }}>删除</button>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
       {/* 主体内容区（可滚动） */}
-      <div className="flex-1 overflow-y-auto px-5 py-4">
+      <div className="flex-1 overflow-y-auto px-5 py-4 space-y-6">
+        {/* 应届生追问式冷启动引导横幅 (US-36) */}
+        <div className="rounded-xl p-4 border border-brand-primary/30 bg-gradient-to-r from-brand-primary/10 via-brand-primary-muted/20 to-transparent flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm">
+          <div className="flex items-start gap-3">
+            <div className="w-9 h-9 rounded-lg bg-brand-primary/20 text-brand-primary flex items-center justify-center text-lg flex-shrink-0">
+              💡
+            </div>
+            <div>
+              <div className="flex items-center gap-2 font-semibold text-text-primary text-sm">
+                零经历不知道简历写什么？师兄帮你深挖素材
+                <span className="text-[11px] px-2 py-0.5 rounded-full font-medium bg-brand-primary text-white">
+                  STAR 向导
+                </span>
+              </div>
+              <p className="text-xs text-text-secondary mt-1 max-w-xl leading-relaxed">
+                没有大厂实习也无需焦虑！基于 STAR 黄金法则，将课程大作业、技术竞赛、科研实验或社团统筹经历提炼为高质量简历要点，一键沉淀入个人知识库。
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setMiningDrawerOpen(true)}
+            className="px-4 py-2 rounded-lg text-xs font-semibold text-white shadow transition-all hover:brightness-110 flex-shrink-0 cursor-pointer border-none flex items-center gap-1.5"
+            style={{
+              background:
+                'linear-gradient(135deg, var(--color-accent-gradient-start), var(--color-accent-gradient-end))',
+            }}
+          >
+            <span>🚀</span> 开启经历挖掘
+          </button>
+        </div>
+
+        {/* 已确认的简历区 */}
+        <div>
+          <div className="mb-3 text-sm font-semibold text-text-primary">
+            已确认的简历
+            <span className="ml-2 text-xs font-normal text-text-tertiary">· 共 {resumes.length} 份</span>
+          </div>
+          {resumes.length === 0 ? (
+            <div className="rounded-md border border-dashed border-border-default p-4 text-sm text-text-muted">暂无已确认简历</div>
+          ) : (
+            <div className="flex flex-col gap-1">
+              {resumes.map((resume) => (
+                <div key={resume.id} className="flex items-center gap-3 rounded-md border border-border-subtle bg-bg-secondary px-3 py-2.5">
+                  <span className="min-w-[36px] rounded bg-bg-tertiary px-1.5 py-0.5 text-center font-mono text-[10px] text-text-secondary">简历</span>
+                  <span className="min-w-0 flex-1 truncate text-sm text-text-primary" title={resume.file_name}>{resume.file_name}</span>
+                  <span className="text-xs text-brand-primary">{resume.direction || '未指定方向'}</span>
+                  <span className="hidden text-xs text-text-muted sm:block">{formatDate(resume.created_at)}</span>
+                  <button type="button" className="min-h-8 px-2 text-xs text-error" onClick={async () => { if (window.confirm('删除这份已入库简历？')) { await deleteResume(resume.id); fetchDocuments(); onKnowledgeRefresh?.(); } }}>删除</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
         {/* 检索错误提示 */}
         {searchError && (
           <div className="mb-4 text-xs text-error bg-[rgba(220,38,38,0.05)] border border-[rgba(220,38,38,0.15)] rounded-md px-3 py-2">
@@ -405,6 +447,16 @@ export default function KnowledgeView({
           )}
         </section>
       </div>
+
+      {/* 应届生经历深度挖掘抽屉 (US-36) */}
+      <MaterialMiningDrawer
+        open={miningDrawerOpen}
+        onClose={() => setMiningDrawerOpen(false)}
+        onKnowledgeRefresh={() => {
+          fetchDocuments();
+          onKnowledgeRefresh?.();
+        }}
+      />
     </div>
   );
 }

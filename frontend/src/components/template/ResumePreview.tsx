@@ -6,7 +6,13 @@
 // 1. AI 生成数据（扁平结构：name/email/phone 在顶层，skills 是对象）
 // 2. 上传解析数据（嵌套结构：basic.name/basic.phone，skills 是字符串数组，含 personal_info）
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import {
+  calculatePageHeight,
+  calculateTotalPages,
+  isPageOverflow,
+  calculatePageBreakPositions,
+} from '@/lib/pagination';
 
 interface ResumePreviewProps {
   /** 简历数据（AI 生成或节点 content_json），null 时显示空状态 */
@@ -21,6 +27,10 @@ interface ResumePreviewProps {
   onEditSection?: (section: string, data: unknown) => void;
   /** US-15: 高亮字段（缺失字段标注） */
   highlightFields?: Set<string>;
+  /** US-34: 目标页数（默认为 1） */
+  defaultTargetPages?: number;
+  /** US-34: 页数变化回调 */
+  onPageCountChange?: (pageCount: number, isOverflow: boolean) => void;
 }
 
 const THEME_COLORS: Record<string, string> = {
@@ -615,8 +625,53 @@ export default function ResumePreview({
   onRegenerateSection,
   generatingSection,
   onEditSection,
+  defaultTargetPages = 1,
+  onPageCountChange,
   // highlightFields 暂未使用，预留给后续高亮标注
 }: ResumePreviewProps) {
+  // US-34: A4 页面排版感知与分页测量
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [containerWidth, setContainerWidth] = useState<number>(0);
+  const [contentHeight, setContentHeight] = useState<number>(0);
+  const [targetPages, setTargetPages] = useState<number>(defaultTargetPages);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+
+    const measure = () => {
+      setContainerWidth(el.clientWidth);
+      setContentHeight(el.scrollHeight);
+    };
+
+    measure();
+
+    let resizeObserver: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(() => {
+        measure();
+      });
+      resizeObserver.observe(el);
+    }
+    window.addEventListener('resize', measure);
+
+    return () => {
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+      }
+      window.removeEventListener('resize', measure);
+    };
+  }, [resumeData, templateId]);
+
+  const pageHeight = calculatePageHeight(containerWidth);
+  const totalPages = calculateTotalPages(contentHeight, pageHeight);
+  const isOverflow = isPageOverflow(totalPages, targetPages);
+  const pageBreaks = calculatePageBreakPositions(pageHeight, totalPages);
+
+  useEffect(() => {
+    onPageCountChange?.(totalPages, isOverflow);
+  }, [totalPages, isOverflow, onPageCountChange]);
+
   if (!resumeData) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-text-muted py-12">
@@ -1027,56 +1082,157 @@ export default function ResumePreview({
           : 'px-4 py-2';
 
   return (
-    <div
-      className={`mx-auto bg-white shadow-sm ${containerStyles[templateId] ?? 'max-w-2xl p-6'}`}
-      style={{ minHeight: '100%', fontFamily }}
-    >
-      {/* 姓名区域 */}
-      {renderNameArea()}
-
-      {/* 按排序渲染各段落 */}
-      <div className={sectionContentClass}>
-        {orderedSections.map((section) => {
-        const renderer = sectionRenderers[section.key];
-        if (!renderer) return null;
-        const content = renderer.render();
-        if (content === null) return null;
-        const isGenerating = generatingSection === section.key;
-        return (
-          <section
-            key={section.key}
-            className={sectionBgStyles[templateId] ?? 'mt-1 mb-2'}
-            style={{ backgroundColor: sectionBgColors[templateId] ?? 'transparent' }}
-          >
-            <div className="flex items-center justify-between">
-              <SectionHeader
-                title={section.title || renderer.title}
-                templateId={templateId}
-                themeColor={themeColor}
-              />
-              {onRegenerateSection && (
-                <button
-                  onClick={() => onRegenerateSection(section.key)}
-                  disabled={isGenerating}
-                  className="text-[10px] px-1.5 py-0.5 rounded text-text-muted hover:text-brand-primary hover:border-brand-primary border border-transparent transition-colors disabled:opacity-50"
-                  title={`重新生成${section.title || renderer.title}`}
-                >
-                  {isGenerating ? '生成中...' : '↻'}
-                </button>
+    <div className="flex flex-col items-center w-full">
+      {/* US-34: A4 页面排版与目标页数控制栏 */}
+      {hasContent && (
+        <div className={`w-full ${containerStyles[templateId] ?? 'max-w-2xl'} mb-3`}>
+          <div className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2 bg-white border border-border-subtle rounded-lg shadow-2xs text-xs">
+            <div className="flex items-center gap-2">
+              <span className="font-medium text-text-primary flex items-center gap-1.5">
+                <svg className="w-3.5 h-3.5 text-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                A4 排版
+              </span>
+              <span
+                data-testid="page-count-badge"
+                className={`px-2 py-0.5 rounded-full text-[11px] font-medium transition-colors ${
+                  isOverflow
+                    ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                    : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                }`}
+              >
+                当前 {totalPages} 页 {isOverflow ? '· 超出目标' : '· 符合目标'}
+              </span>
+              {pageHeight > 0 && (
+                <span className="text-text-muted hidden sm:inline text-[11px]">
+                  (单页高约 {pageHeight}px)
+                </span>
               )}
             </div>
-            {content}
-          </section>
-        );
-      })}
 
-      {/* 全部段落为空时的提示 */}
-      </div>
-      {!hasContent && (
-        <div className="text-center text-sm text-text-muted py-8">
-          简历内容为空，请先生成各段落
+            <div className="flex items-center gap-1.5">
+              <span className="text-text-muted text-[11px]">目标页数:</span>
+              <div className="inline-flex rounded-md p-0.5 bg-bg-secondary border border-border-subtle">
+                <button
+                  type="button"
+                  data-testid="target-page-1-btn"
+                  onClick={() => setTargetPages(1)}
+                  className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${
+                    targetPages === 1
+                      ? 'bg-brand-primary text-white shadow-2xs'
+                      : 'text-text-secondary hover:text-text-primary'
+                  }`}
+                >
+                  1 页
+                </button>
+                <button
+                  type="button"
+                  data-testid="target-page-2-btn"
+                  onClick={() => setTargetPages(2)}
+                  className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${
+                    targetPages === 2
+                      ? 'bg-brand-primary text-white shadow-2xs'
+                      : 'text-text-secondary hover:text-text-primary'
+                  }`}
+                >
+                  2 页
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* 超页提示横幅 */}
+          {isOverflow && (
+            <div
+              data-testid="page-overflow-warning"
+              className="mt-2 flex items-start gap-2 p-2.5 bg-amber-50 border border-amber-200 text-amber-900 rounded-lg text-xs leading-relaxed shadow-2xs"
+            >
+              <span className="text-sm mt-0.5">⚠️</span>
+              <div className="flex-1">
+                <div className="font-semibold text-amber-900">
+                  当前简历内容已超出预期的 {targetPages} 页目标（实际排版为 {totalPages} 页）
+                </div>
+                <div className="text-amber-700 text-[11px] mt-0.5">
+                  在招聘初筛中，单页简历拥有更高的通读率。建议适当精简工作经历亮点、合并技能标签或调整模板段落。
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
+
+      {/* 简历主纸面容器 */}
+      <div
+        ref={containerRef}
+        className={`relative w-full mx-auto bg-white shadow-sm transition-all ${containerStyles[templateId] ?? 'max-w-2xl p-6'}`}
+        style={{ minHeight: pageHeight > 0 ? `${pageHeight}px` : '100%', fontFamily }}
+      >
+        {/* US-34: A4 虚拟分页指示线 */}
+        {hasContent && pageHeight > 0 && pageBreaks.map((topPos, idx) => {
+          const pageIndex = idx + 1;
+          return (
+            <div
+              key={pageIndex}
+              data-testid={`page-break-${pageIndex}`}
+              className="absolute left-0 right-0 pointer-events-none z-10 flex items-center justify-center select-none"
+              style={{ top: `${topPos}px`, transform: 'translateY(-50%)' }}
+            >
+              <div className="w-full border-b-2 border-dashed border-red-400 opacity-60" />
+              <span className="absolute px-2.5 py-0.5 bg-red-50 text-red-700 border border-red-300 rounded-full text-[11px] font-medium shadow-xs whitespace-nowrap">
+                ✂️ A4 分页线 · 第 {pageIndex} 页结束 / 第 {pageIndex + 1} 页开始
+              </span>
+            </div>
+          );
+        })}
+
+        {/* 姓名区域 */}
+        {renderNameArea()}
+
+        {/* 按排序渲染各段落 */}
+        <div className={sectionContentClass}>
+          {orderedSections.map((section) => {
+            const renderer = sectionRenderers[section.key];
+            if (!renderer) return null;
+            const content = renderer.render();
+            if (content === null) return null;
+            const isGenerating = generatingSection === section.key;
+            return (
+              <section
+                key={section.key}
+                className={sectionBgStyles[templateId] ?? 'mt-1 mb-2'}
+                style={{ backgroundColor: sectionBgColors[templateId] ?? 'transparent' }}
+              >
+                <div className="flex items-center justify-between">
+                  <SectionHeader
+                    title={section.title || renderer.title}
+                    templateId={templateId}
+                    themeColor={themeColor}
+                  />
+                  {onRegenerateSection && (
+                    <button
+                      onClick={() => onRegenerateSection(section.key)}
+                      disabled={isGenerating}
+                      className="text-[10px] px-1.5 py-0.5 rounded text-text-muted hover:text-brand-primary hover:border-brand-primary border border-transparent transition-colors disabled:opacity-50"
+                      title={`重新生成${section.title || renderer.title}`}
+                    >
+                      {isGenerating ? '生成中...' : '↻'}
+                    </button>
+                  )}
+                </div>
+                {content}
+              </section>
+            );
+          })}
+        </div>
+
+        {/* 全部段落为空时的提示 */}
+        {!hasContent && (
+          <div className="text-center text-sm text-text-muted py-8">
+            简历内容为空，请先生成各段落
+          </div>
+        )}
+      </div>
     </div>
   );
 }
