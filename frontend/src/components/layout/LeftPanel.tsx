@@ -43,6 +43,9 @@ const NAV_ICONS: Record<string, React.ReactNode> = {
       <path d="M8 2l1.5 3H14l-2.5 2 1 3.5L8 8.5 3.5 10.5l1-3.5L2 5h4.5z" />
     </svg>
   ),
+  applications: (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="2" y="1.5" width="12" height="13" rx="1.5" /><path d="M5 5h6M5 8h6M5 11h4" /></svg>
+  ),
 };
 
 interface LeftPanelProps {
@@ -90,12 +93,14 @@ export default function LeftPanel({
     { label: '总览面板', icon: 'overview', view: 'version-tree' },
     { label: '简历版本分支', icon: 'tree', view: 'version-tree', badge: branchCount },
     { label: '个人知识库', icon: 'kb', view: 'knowledge', badge: knowledgeDocCount },
+    { label: '投递追踪', icon: 'applications', view: 'applications' },
   ];
 
   // 根据 activeView 决定高亮项
   // 右栏收起时高亮"简历版本分支"，展开时高亮"总览面板"
   const activeLabel =
     activeView === 'knowledge' ? '个人知识库'
+      : activeView === 'applications' ? '投递追踪'
       : rightPanelCollapsed ? '简历版本分支'
       : '总览面板';
 
@@ -141,10 +146,12 @@ export default function LeftPanel({
       {/* Navigation */}
       <nav className="p-2 px-3">
         {navItems.map((item) => (
-          <div
+          <button
+            type="button"
             key={item.label}
             onClick={() => handleNavClick(item)}
-            className={`flex items-center gap-3 px-3 py-2 rounded-md cursor-pointer transition-all mb-0.5 border-l-2 text-sm ${
+            aria-pressed={activeLabel === item.label}
+            className={`w-full flex items-center gap-3 px-3 py-2 rounded-md cursor-pointer transition-all mb-0.5 border-l-2 text-sm text-left ${
               activeLabel === item.label
                 ? 'bg-brand-primary-muted text-brand-primary border-brand-primary font-medium'
                 : 'text-text-secondary border-transparent hover:bg-bg-hover hover:text-text-primary'
@@ -168,7 +175,7 @@ export default function LeftPanel({
                 {item.badge}
               </span>
             )}
-          </div>
+          </button>
         ))}
       </nav>
 
