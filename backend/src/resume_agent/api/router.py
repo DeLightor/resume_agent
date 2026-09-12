@@ -9,6 +9,7 @@ from fastapi import APIRouter
 
 from resume_agent.api import (
     agent,
+    applications,
     completeness,
     diff,
     export,
@@ -38,6 +39,7 @@ api_router.include_router(health.router)
 # 业务路由
 api_router.include_router(tree_events.router)
 api_router.include_router(tree.router)
+api_router.include_router(applications.router)
 api_router.include_router(resumes.router)
 api_router.include_router(knowledge.router)
 api_router.include_router(jd.router)

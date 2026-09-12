@@ -24,6 +24,8 @@ TABLES: tuple[str, ...] = (
     "parse_tasks",
     "agent_memories",
     "material_mining_sessions",
+    "application_records",
+    "application_events",
 )
 
 

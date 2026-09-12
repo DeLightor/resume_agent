@@ -11,6 +11,8 @@ import NodeDetailPanel from '@/components/tree/NodeDetailPanel';
 import CreateNodeModal from '@/components/tree/CreateNodeModal';
 import KnowledgeView from '@/components/knowledge/KnowledgeView';
 import AgentWorkbench from '@/components/agent/AgentWorkbench';
+import ApplicationTrackerView from '@/components/applications/ApplicationTrackerView';
+import ApplicationCreateModal from '@/components/applications/ApplicationCreateModal';
 import TemplateSelector from '@/components/template/TemplateSelector';
 import ResumePreview from '@/components/template/ResumePreview';
 import DiffView from '@/components/diff/DiffView';
@@ -122,6 +124,7 @@ export default function CenterPanel({
   const [actionError, setActionError] = useState('');
   const [draftReview, setDraftReview] = useState<DraftReview | null>(null);
   const [showHistory, setShowHistory] = useState(false);
+  const [showApplicationCreate, setShowApplicationCreate] = useState(false);
   const selectedId = useRef<string | null>(null);
   selectedId.current = selectedNode?.node_id ?? null;
   const applySavedNode = useCallback((node: ResumeNode) => {
@@ -381,6 +384,10 @@ export default function CenterPanel({
     );
   }
 
+  if (activeView === 'applications') {
+    return <ApplicationTrackerView />;
+  }
+
   // AI 助手视图（US-28）：渲染 AgentWorkbench（对话 + 行为时间线）
   // US-29：透传工作台上下文与快捷指令（pendingAsk 自动发送）
   if (activeView === 'agent') {
@@ -585,6 +592,13 @@ export default function CenterPanel({
               版本对比 Diff
             </button>
             <button
+              onClick={() => setShowApplicationCreate(true)}
+              disabled={!selectedNode}
+              className="inline-flex items-center gap-2 px-5 py-2 bg-transparent text-text-secondary text-sm font-medium border border-border-default rounded-md cursor-pointer transition-all font-body hover:border-border-strong hover:text-text-primary hover:bg-bg-hover disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              记录投递
+            </button>
+            <button
               onClick={handleDeleteNode}
               disabled={!selectedNode || selectedNode.node_type === 'master'}
               className="inline-flex items-center gap-2 px-5 py-2 bg-transparent text-text-secondary text-sm font-medium border border-border-default rounded-md cursor-pointer transition-all font-body hover:border-border-strong hover:text-text-primary hover:bg-bg-hover disabled:opacity-50 disabled:cursor-not-allowed"
@@ -614,6 +628,12 @@ export default function CenterPanel({
         onCreated={handleCreated}
         parentOptions={tree?.nodes ?? []}
       />
+      {showApplicationCreate && selectedNode && <ApplicationCreateModal
+        node={selectedNode}
+        structuredJD={structuredJD}
+        onClose={() => setShowApplicationCreate(false)}
+        onCreated={() => { setShowApplicationCreate(false); setActionError('已创建投递记录，可在“投递追踪”查看。'); }}
+      />}
     </main>
   );
 }

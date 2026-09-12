@@ -48,6 +48,7 @@ import type {
   SynthesizeMiningResultResponse,
   StarResult,
 } from '@/types/mining';
+import type { ApplicationDetail, ApplicationRecord, CreateApplicationRequest, UpdateApplicationRequest } from '@/types/application';
 
 const BASE_URL = '/api';
 
@@ -60,7 +61,8 @@ const BASE_URL = '/api';
  */
 export class ApiError extends Error {
   status: number;
-  constructor(message: string, status: number) { super(message); this.status = status; }
+  code?: string;
+  constructor(message: string, status: number, code?: string) { super(message); this.status = status; this.code = code; }
 }
 
 export async function apiRequest<T>(
@@ -81,7 +83,7 @@ export async function apiRequest<T>(
   const json = await res.json().catch(() => null);
   if (!res.ok) {
     const detail = json?.detail;
-    throw new ApiError(json?.error?.message ?? (typeof detail === 'string' ? detail : detail?.message) ?? `HTTP ${res.status}: ${res.statusText}`, res.status);
+    throw new ApiError(json?.error?.message ?? (typeof detail === 'string' ? detail : detail?.message) ?? `HTTP ${res.status}: ${res.statusText}`, res.status, json?.error?.code);
   }
   if (!json) throw new ApiError('服务器返回了无法读取的响应', res.status);
 
@@ -122,8 +124,8 @@ export const api = {
       body: body ? JSON.stringify(body) : undefined,
     }),
 
-  del: <T>(endpoint: string) =>
-    apiRequest<T>(endpoint, { method: 'DELETE' }),
+  del: <T>(endpoint: string, body?: unknown) =>
+    apiRequest<T>(endpoint, { method: 'DELETE', body: body === undefined ? undefined : JSON.stringify(body) }),
 };
 
 // ===== 资产冷启动相关 API（参考 design.md 第 3 节）=====
@@ -287,6 +289,18 @@ export async function deleteNode(
     `/tree/node/${encodeURIComponent(nodeId)}`,
   );
 }
+
+// ===== 投递追踪 API（US-37） =====
+export const createApplication = (request: CreateApplicationRequest) => api.post<ApplicationRecord>('/applications', request);
+export const listApplications = (status?: string, deleted = 'exclude') => {
+  const params = new URLSearchParams({ deleted });
+  if (status) params.set('status', status);
+  return api.get<ApplicationRecord[]>(`/applications?${params.toString()}`);
+};
+export const getApplication = (id: string) => api.get<ApplicationDetail>(`/applications/${encodeURIComponent(id)}`);
+export const updateApplication = (id: string, request: UpdateApplicationRequest) => api.put<ApplicationRecord>(`/applications/${encodeURIComponent(id)}`, request);
+export const deleteApplication = (id: string, expectedVersion: number) => api.del<ApplicationRecord>(`/applications/${encodeURIComponent(id)}`, { expected_version: expectedVersion });
+export const restoreApplication = (id: string, expectedVersion: number) => api.post<ApplicationRecord>(`/applications/${encodeURIComponent(id)}/restore`, { expected_version: expectedVersion });
 
 // ===== 知识库 RAG 相关 API（US-3）=====
 

@@ -12,6 +12,8 @@ import type { JDAnalysisResult, JDStructured } from '@/types/jd';
 
 interface JDCardProps {
   result: JDAnalysisResult;
+  /** 将用户最后编辑的 JD 同步给工作台上下文和投递快照。 */
+  onStructuredChange?: (structured: JDStructured) => void;
 }
 
 /** 标签配色方案 */
@@ -210,8 +212,10 @@ function BonusSection({
   );
 }
 
-export default function JDCard({ result }: JDCardProps) {
+export default function JDCard({ result, onStructuredChange }: JDCardProps) {
   const [structured, setStructured] = useState<JDStructured>(result.structured);
+
+  useEffect(() => { onStructuredChange?.(structured); }, [structured, onStructuredChange]);
 
   /** 更新标量字段（job_title / company） */
   function updateField<K extends keyof JDStructured>(
