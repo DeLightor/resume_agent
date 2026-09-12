@@ -33,6 +33,7 @@ from resume_agent.tools.agent_tools import (
 logger = logging.getLogger("resume_agent")
 
 EventCallback = Callable[[dict[str, Any]], Awaitable[None]]
+_MEMORY_SNAPSHOT_PREFIX = "【会话最新记忆规则】"
 
 AGENT_SYSTEM_PROMPT = """你是 Resume-Agent 的简历助理 Agent，帮助用户管理简历、分析 JD、生成与优化简历内容。
 
@@ -148,14 +149,18 @@ class AgentRunner:
 
         # 首次运行：注入 system prompt
         if not session.messages:
-            system_prompt = AGENT_SYSTEM_PROMPT
-            active_memory = memory_store.get_active_memory_prompt(self.db_path)
-            if active_memory:
-                system_prompt = f"{system_prompt}\n\n{active_memory}"
             session.messages.append({
                 "role": "system",
-                "content": system_prompt,
+                "content": AGENT_SYSTEM_PROMPT,
             })
+            active_memory = memory_store.get_active_memory_prompt(self.db_path)
+            if active_memory:
+                # 记忆单独作为可替换快照保存。不能拼进基础 system prompt，
+                # 否则用户删除规则后，正在进行的会话仍会携带过期约束。
+                session.messages.append({
+                    "role": "system",
+                    "content": f"{_MEMORY_SNAPSHOT_PREFIX}\n{active_memory}",
+                })
             if session.context:
                 session.messages.append({
                     "role": "system",
@@ -166,10 +171,6 @@ class AgentRunner:
                 })
 
         if user_message:
-            session.messages.append({
-                "role": "user",
-                "content": user_message,
-            })
             # US-35: 智能记忆识别与长期记忆沉淀（LLM 语义分析 + 规则兜底，无固定句式限制）
             try:
                 extracted_list = await memory_store.extract_memories_smart(
@@ -190,6 +191,28 @@ class AgentRunner:
                         })
             except Exception as exc:  # noqa: BLE001
                 logger.warning("自动沉淀记忆失败: %s", exc)
+            active_memory = memory_store.get_active_memory_prompt(self.db_path)
+            snapshot_index = next(
+                (
+                    index
+                    for index in range(len(session.messages) - 1, -1, -1)
+                    if session.messages[index].get("role") == "system"
+                    and str(session.messages[index].get("content", "")).startswith(
+                        _MEMORY_SNAPSHOT_PREFIX
+                    )
+                ),
+                None,
+            )
+            if active_memory:
+                snapshot = f"{_MEMORY_SNAPSHOT_PREFIX}\n{active_memory}"
+                if snapshot_index is not None:
+                    session.messages[snapshot_index]["content"] = snapshot
+                else:
+                    session.messages.append({"role": "system", "content": snapshot})
+            elif snapshot_index is not None:
+                # 用户删空全部活跃记忆时，立即撤掉该会话的旧规则。
+                session.messages.pop(snapshot_index)
+            session.messages.append({"role": "user", "content": user_message})
 
         session.status = "running"
         store.save_session(session, self.db_path)

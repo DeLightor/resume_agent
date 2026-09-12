@@ -56,11 +56,7 @@ export interface MiningStepAnswer {
   answered_at?: string;
 }
 
-export interface MiningContextJson {
-  category: string;
-  title: string;
-  answers: MiningStepAnswer[];
-}
+export type MiningContext = Record<string, string>;
 
 export type MiningSessionStatus = 'in_progress' | 'completed' | 'abandoned';
 
@@ -70,8 +66,8 @@ export interface MaterialMiningSession {
   title: string;
   status: MiningSessionStatus;
   current_step: number; // 1: S, 2: T, 3: A, 4: R, 5: 提炼完成
-  context_json: MiningContextJson;
-  star_result_json?: StarResult | null;
+  context: MiningContext;
+  star_result?: StarResult | null;
   created_at: string;
   updated_at: string;
 }
@@ -87,11 +83,9 @@ export interface SubmitMiningAnswerParams {
 }
 
 export interface SubmitMiningAnswerResponse {
-  session_id: string;
-  step: number;
-  ai_feedback: string;
-  next_step: number;
-  is_last_step: boolean;
+  session: MaterialMiningSession;
+  feedback: string;
+  next_step: MiningStepInfo | null;
 }
 
 export interface SynthesizeMiningResultResponse {
@@ -103,5 +97,4 @@ export interface CommitMiningResultResponse {
   upload_id: string;
   file_name: string;
   chunk_count: number;
-  message: string;
 }

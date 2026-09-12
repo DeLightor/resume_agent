@@ -46,6 +46,7 @@ import type {
   SubmitMiningAnswerParams,
   SubmitMiningAnswerResponse,
   SynthesizeMiningResultResponse,
+  StarResult,
 } from '@/types/mining';
 
 const BASE_URL = '/api';
@@ -795,13 +796,13 @@ export const synthesizeMiningResult = (id: string, checkDuplicate = true) =>
     },
   );
 
-export const commitMiningToKnowledge = (id: string) =>
+export const commitMiningToKnowledge = (id: string, starResult?: StarResult) =>
   api.post<CommitMiningResultResponse>(
     `/mining/sessions/${encodeURIComponent(id)}/commit`,
+    starResult ? { star_result: starResult } : undefined,
   );
 
 export const deleteMiningSession = (id: string) =>
   api.del<{ deleted: boolean; id: string }>(
     `/mining/sessions/${encodeURIComponent(id)}`,
   );
-

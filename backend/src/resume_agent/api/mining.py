@@ -42,6 +42,10 @@ class SynthesizeRequest(BaseModel):
     check_duplicate: bool = Field(True, description="是否同时执行知识库向量查重")
 
 
+class CommitMiningRequest(BaseModel):
+    star_result: dict[str, Any] | None = Field(default=None, description="用户编辑后的 STAR 成果")
+
+
 @router.get("/templates")
 async def get_templates() -> dict[str, Any]:
     """获取预置的五大经历分类追问模板。"""
@@ -128,10 +132,12 @@ async def synthesize_result(session_id: str, req: SynthesizeRequest | None = Non
 
 
 @router.post("/sessions/{session_id}/commit")
-async def commit_to_knowledge(session_id: str) -> dict[str, Any]:
+async def commit_to_knowledge(session_id: str, req: CommitMiningRequest | None = None) -> dict[str, Any]:
     """用户确认提炼成果无误，打包生成 Markdown 文件并写入知识库与 Chroma 向量索引。"""
     try:
-        result = material_mining.commit_mining_to_knowledge(session_id)
+        result = material_mining.commit_mining_to_knowledge(
+            session_id, star_result=req.star_result if req else None
+        )
         return success(result)
     except ValueError as exc:
         return error("INVALID_ARGUMENT", str(exc))

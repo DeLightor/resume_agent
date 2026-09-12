@@ -101,6 +101,20 @@ export default function MaterialMiningDrawer({
   const currentStepInfo = currentTemplate?.steps.find(
     (s) => s.step === (session ? session.current_step : 1),
   );
+  const answeredSteps: MiningStepAnswer[] = session
+    ? Object.entries(session.context)
+        .map(([key, user_answer]) => {
+          const step = Number(key.replace('step_', ''));
+          return {
+            step,
+            step_title: currentTemplate?.steps.find((item) => item.step === step)?.title ?? `第 ${step} 步`,
+            question: currentTemplate?.steps.find((item) => item.step === step)?.question ?? '',
+            user_answer,
+          };
+        })
+        .filter((answer) => Number.isInteger(answer.step) && answer.step >= 1 && answer.step <= 4)
+        .sort((a, b) => a.step - b.step)
+    : [];
 
   // 开始新会话
   const handleStartSession = async () => {
@@ -139,8 +153,8 @@ export default function MaterialMiningDrawer({
       setCommitSuccessMsg(null);
 
       // 如果已有提炼结果直接呈现
-      if (full.star_result_json) {
-        setStarResult(full.star_result_json);
+      if (full.star_result) {
+        setStarResult(full.star_result);
       } else if (full.current_step >= 5) {
         // 已完成步骤4，触发提炼
         void triggerSynthesize(full.id);
@@ -166,14 +180,14 @@ export default function MaterialMiningDrawer({
         step: session.current_step,
         answer,
       });
-      setLatestFeedback(res.ai_feedback);
+      setLatestFeedback(res.feedback);
       setAnswerInput('');
 
       // 重新拉取最新会话
       const updated = await getMiningSession(session.id);
       setSession(updated);
 
-      if (res.is_last_step || updated.current_step >= 5) {
+      if (updated.current_step >= 5) {
         // 步骤完成，自动触发 STAR 提炼与查重
         await triggerSynthesize(session.id);
       }
@@ -208,7 +222,7 @@ export default function MaterialMiningDrawer({
     setCommitting(true);
     setStepError(null);
     try {
-      const res = await commitMiningToKnowledge(session.id);
+      const res = await commitMiningToKnowledge(session.id, starResult ?? undefined);
       setCommitSuccessMsg(
         `🎉 沉淀成功！文档已写入知识库并完成向量切片索引（共 ${res.chunk_count} 个切片）。`,
       );
@@ -602,17 +616,16 @@ export default function MaterialMiningDrawer({
               </div>
 
               {/* 已问答历史展开 */}
-              {session.context_json?.answers &&
-                session.context_json.answers.length > 0 && (
+              {answeredSteps.length > 0 && (
                   <details className="mt-4 pt-3 border-t border-border-subtle group">
                     <summary className="text-xs text-text-muted cursor-pointer hover:text-text-primary list-none flex items-center gap-1 select-none">
                       <span className="transition-transform group-open:rotate-90">
                         ▶
                       </span>
-                      查看已记录的 {session.context_json.answers.length} 轮问答
+                      查看已记录的 {answeredSteps.length} 轮问答
                     </summary>
                     <div className="mt-3 space-y-2.5">
-                      {session.context_json.answers.map(
+                      {answeredSteps.map(
                         (ans: MiningStepAnswer) => (
                           <div
                             key={ans.step}

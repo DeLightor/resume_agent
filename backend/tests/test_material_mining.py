@@ -29,6 +29,7 @@ from resume_agent.services.material_mining import (
     get_mining_session,
     get_mining_templates,
     list_mining_sessions,
+    save_mining_session,
     submit_step_answer,
     synthesize_star_result,
 )
@@ -226,13 +227,131 @@ def test_check_duplicate_in_knowledge(initialized_db: Any, monkeypatch: Any) -> 
 
     dup_res = check_duplicate_in_knowledge("基于动态稀疏注意力的视觉特征对齐模块设计与调优")
     assert dup_res["is_duplicate"] is True
-    assert dup_res["score"] >= 0.85
-    assert "existing_project.md" in dup_res["top_match"]["source_file"]
+    assert dup_res["max_score"] >= 0.85
+    assert "existing_project.md" in dup_res["similar_chunks"][0]["source_file"]
 
     # 2. 距离较大（不重复，如 score = 1.0 - 0.5 = 0.50 < 0.85）
     monkeypatch.setattr(chroma_client, "get_knowledge_collection", lambda: _MockCollection(distance=0.50))
     non_dup = check_duplicate_in_knowledge("全新的社团志愿者策划经历")
     assert non_dup["is_duplicate"] is False
+
+
+def test_duplicate_check_matches_drawer_contract(initialized_db: Any, monkeypatch: Any) -> None:
+    """高相似结果必须使用前端抽屉声明的字段，避免渲染时读取 undefined。"""
+    class _MockCollection:
+        def count(self) -> int:
+            return 1
+
+        def query(self, query_texts: list[str], n_results: int = 3) -> dict[str, Any]:
+            return {
+                "ids": [["chunk-existing"]],
+                "documents": [["已有相似素材"]],
+                "metadatas": [[{"source_file": "existing.md"}]],
+                "distances": [[0.05]],
+            }
+
+    from resume_agent.rag import chroma_client
+
+    monkeypatch.setattr(chroma_client, "get_knowledge_collection", lambda: _MockCollection())
+    result = check_duplicate_in_knowledge("相似素材")
+
+    assert result["is_duplicate"] is True
+    assert result["max_score"] == 0.95
+    assert result["threshold"] == 0.85
+    assert result["similar_chunks"] == [{
+        "chunk_id": "chunk-existing",
+        "source_file": "existing.md",
+        "chunk_text": "已有相似素材",
+        "score": 0.95,
+    }]
+
+
+def test_submit_step_answer_rejects_stale_step(initialized_db: Any) -> None:
+    """会话只接受当前 STAR 步骤，不能被旧页面跳步或覆盖。"""
+    session = create_mining_session(
+        category="course_project",
+        title="状态机测试",
+        db_path=initialized_db,
+    )
+
+    with pytest.raises(ValueError, match="当前应回答第 1 步"):
+        asyncio.run(
+            submit_step_answer(
+                session.id,
+                step=2,
+                answer="过期页面提交的第二步答案",
+                db_path=initialized_db,
+            )
+        )
+
+
+def test_commit_mining_fails_without_vector_index_and_keeps_session_retryable(
+    initialized_db: Any,
+    monkeypatch: Any,
+    tmp_path: Any,
+) -> None:
+    """向量索引失败不能把会话标为完成或留下伪成功的知识库记录。"""
+    from resume_agent.config import settings
+    from resume_agent.db.connection import get_connection
+    from resume_agent.rag import chroma_client
+
+    monkeypatch.setattr(settings, "sqlite_path", initialized_db)
+    monkeypatch.setattr(settings, "files_root", tmp_path)
+
+    class _FailingCollection:
+        def upsert(self, **_: Any) -> None:
+            raise RuntimeError("Chroma unavailable")
+
+        def delete(self, **_: Any) -> None:
+            pass
+
+    monkeypatch.setattr(chroma_client, "get_knowledge_collection", lambda: _FailingCollection())
+    session = create_mining_session("course_project", "索引失败重试", initialized_db)
+    session.star_result = {
+        "summary": "可重试素材",
+        "situation": "S",
+        "task": "T",
+        "action": "A",
+        "result": "R",
+        "tech_stack": ["Python"],
+        "bullet_points": ["可重试的编辑结果"],
+    }
+    save_mining_session(session, initialized_db)
+
+    with pytest.raises(RuntimeError, match="向量索引"):
+        commit_mining_to_knowledge(session.id, initialized_db)
+
+    with get_connection(initialized_db) as conn:
+        assert conn.execute("SELECT COUNT(*) AS count FROM upload_records").fetchone()["count"] == 0
+        assert conn.execute("SELECT COUNT(*) AS count FROM knowledge_chunks").fetchone()["count"] == 0
+    assert get_mining_session(session.id, initialized_db).status == "in_progress"
+    assert list((tmp_path / "knowledge").glob("*")) == []
+
+
+def test_commit_mining_rejects_malformed_edited_star_result(initialized_db: Any) -> None:
+    """确认页提交的编辑结果必须完整且类型正确，且不能污染已提炼草稿。"""
+    session = create_mining_session("course_project", "STAR 校验", initialized_db)
+    session.star_result = {
+        "summary": "原始摘要",
+        "situation": "原始背景",
+        "task": "原始任务",
+        "action": "原始动作",
+        "result": "原始结果",
+        "tech_stack": ["Python"],
+        "bullet_points": ["原始条目"],
+    }
+    save_mining_session(session, initialized_db)
+
+    with pytest.raises(ValueError, match="STAR 成果"):
+        commit_mining_to_knowledge(
+            session.id,
+            initialized_db,
+            star_result={"tech_stack": [1]},
+        )
+
+    persisted = get_mining_session(session.id, initialized_db)
+    assert persisted is not None
+    assert persisted.star_result == session.star_result
 
 
 # ---------------------------------------------------------------------------
@@ -280,8 +399,16 @@ def test_commit_mining_to_knowledge(initialized_db: Any, monkeypatch: Any, tmp_p
     }
     material_mining.save_mining_session(session, db_path=initialized_db)
 
-    # 执行提交入库
-    result = commit_mining_to_knowledge(session.id, db_path=initialized_db)
+    # 用户在确认前编辑的 bullet 必须成为最终入库内容。
+    edited_star = {
+        **session.star_result,
+        "bullet_points": ["用户确认前手动改写的最终简历条目"],
+    }
+    result = commit_mining_to_knowledge(
+        session.id,
+        db_path=initialized_db,
+        star_result=edited_star,
+    )
 
     assert result["ok"] is True
     assert result["upload_id"] is not None
@@ -294,6 +421,7 @@ def test_commit_mining_to_knowledge(initialized_db: Any, monkeypatch: Any, tmp_p
     content = target_file.read_text(encoding="utf-8")
     assert "分布式 KV 存储" in content
     assert "Raft" in content
+    assert "用户确认前手动改写的最终简历条目" in content
 
     # 数据库 upload_records 与 knowledge_chunks 已持久化
     from resume_agent.db.connection import get_connection

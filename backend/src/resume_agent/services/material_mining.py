@@ -398,6 +398,10 @@ async def submit_step_answer(
     session = get_mining_session(session_id, db_path)
     if not session:
         raise ValueError(f"会话不存在: {session_id}")
+    if session.status != "in_progress":
+        raise ValueError("会话已完成，不能继续提交回答")
+    if step != session.current_step:
+        raise ValueError(f"当前应回答第 {session.current_step} 步，不能提交第 {step} 步")
 
     clean_ans = (answer or "").strip()
     if not clean_ans:
@@ -539,14 +543,14 @@ def check_duplicate_in_knowledge(
     """
     cleaned = (text or "").strip()
     if not cleaned:
-        return {"is_duplicate": False, "score": 0.0, "top_match": None}
+        return {"is_duplicate": False, "max_score": 0.0, "threshold": threshold, "similar_chunks": []}
 
     from resume_agent.rag import chroma_client
 
     try:
         collection = chroma_client.get_knowledge_collection()
         if not collection or collection.count() == 0:
-            return {"is_duplicate": False, "score": 0.0, "top_match": None}
+            return {"is_duplicate": False, "max_score": 0.0, "threshold": threshold, "similar_chunks": []}
 
         res = collection.query(query_texts=[cleaned], n_results=1)
         ids = res.get("ids", [[]])
@@ -555,7 +559,7 @@ def check_duplicate_in_knowledge(
         distances = res.get("distances", [[]])
 
         if not ids or not ids[0]:
-            return {"is_duplicate": False, "score": 0.0, "top_match": None}
+            return {"is_duplicate": False, "max_score": 0.0, "threshold": threshold, "similar_chunks": []}
 
         dist = distances[0][0] if distances and distances[0] else 1.0
         score = round(max(0.0, 1.0 - (dist if dist is not None else 1.0)), 4)
@@ -563,24 +567,62 @@ def check_duplicate_in_knowledge(
         meta = metas[0][0] if metas and metas[0] else {}
 
         is_dup = score >= threshold
-        top_match = {
-            "text": doc[:200],
+        similar_match = {
+            "chunk_id": str(ids[0][0]),
             "source_file": meta.get("source_file", "") if isinstance(meta, dict) else "",
+            "chunk_text": doc[:200],
             "score": score,
         }
         return {
             "is_duplicate": is_dup,
-            "score": score,
-            "top_match": top_match if is_dup else None,
+            "max_score": score,
+            "threshold": threshold,
+            "similar_chunks": [similar_match] if is_dup else [],
         }
     except Exception as exc:  # noqa: BLE001
         logger.warning("向量查重检测异常，默认不拦截: %s", exc)
-        return {"is_duplicate": False, "score": 0.0, "top_match": None}
+        return {"is_duplicate": False, "max_score": 0.0, "threshold": threshold, "similar_chunks": []}
+
+
+_STAR_TEXT_FIELDS: tuple[str, ...] = (
+    "summary",
+    "situation",
+    "task",
+    "action",
+    "result",
+)
+_STAR_LIST_FIELDS: tuple[str, ...] = ("tech_stack", "bullet_points")
+
+
+def _validate_star_result(star_result: Any) -> dict[str, Any]:
+    """验证并规范化可入库的 STAR 成果，避免确认页提交的任意 JSON 污染草稿。"""
+    if not isinstance(star_result, dict):
+        raise ValueError("STAR 成果格式无效：应为对象")
+
+    normalized: dict[str, Any] = {}
+    for field in _STAR_TEXT_FIELDS:
+        value = star_result.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"STAR 成果格式无效：{field} 必须是非空文本")
+        normalized[field] = value.strip()
+
+    for field in _STAR_LIST_FIELDS:
+        value = star_result.get(field)
+        if not isinstance(value, list) or any(
+            not isinstance(item, str) or not item.strip() for item in value
+        ):
+            raise ValueError(f"STAR 成果格式无效：{field} 必须是字符串列表")
+        normalized[field] = [item.strip() for item in value]
+
+    if not normalized["bullet_points"]:
+        raise ValueError("STAR 成果格式无效：bullet_points 至少需要一条内容")
+    return normalized
 
 
 def commit_mining_to_knowledge(
     session_id: str,
     db_path: Path | str | None = None,
+    star_result: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """将挖掘成果格式化为物理 Markdown 文件，并自动化写入 upload_records 与向量集合。"""
     session = get_mining_session(session_id, db_path)
@@ -588,8 +630,12 @@ def commit_mining_to_knowledge(
         raise ValueError(f"会话不存在: {session_id}")
     if not session.star_result:
         raise ValueError("会话尚未提炼 STAR 成果，无法入库")
+    if star_result is not None:
+        # 先校验，再持久化，失败时保留可继续编辑的原始提炼结果。
+        session.star_result = _validate_star_result(star_result)
+        save_mining_session(session, db_path)
 
-    star = session.star_result
+    star = _validate_star_result(session.star_result)
     category_title = next(
         (t["title"] for t in MINING_TEMPLATES if t["category"] == session.category),
         session.category,
@@ -646,6 +692,12 @@ def commit_mining_to_knowledge(
 
     # 3. 写入 upload_records
     effective_db = db_path or settings.sqlite_path
+    from resume_agent.rag.chroma_client import get_knowledge_collection
+
+    collection = get_knowledge_collection()
+    if not collection:
+        saved_path.unlink(missing_ok=True)
+        raise RuntimeError("向量索引不可用，请稍后重试")
     with get_connection(effective_db) as conn:
         conn.execute(
             """
@@ -659,9 +711,6 @@ def commit_mining_to_knowledge(
     from resume_agent.rag.chunker import chunk_text
     chunks = chunk_text(md_content)
     chunk_count = len(chunks)
-
-    from resume_agent.rag.chroma_client import get_knowledge_collection
-    collection = get_knowledge_collection()
 
     chroma_ids: list[str] = []
     chroma_docs: list[str] = []
@@ -689,7 +738,7 @@ def commit_mining_to_knowledge(
             chroma_docs.append(chk)
             chroma_metas.append(meta)
 
-    if chroma_ids and collection:
+    if chroma_ids:
         try:
             collection.upsert(
                 ids=chroma_ids,
@@ -697,7 +746,15 @@ def commit_mining_to_knowledge(
                 metadatas=chroma_metas,
             )
         except Exception as exc:  # noqa: BLE001
-            logger.warning("写入 Chroma 失败: %s", exc)
+            try:
+                collection.delete(ids=chroma_ids)
+            except Exception:  # noqa: BLE001
+                logger.warning("清理失败的 Chroma 索引时发生异常", exc_info=True)
+            with get_connection(effective_db) as conn:
+                conn.execute("DELETE FROM knowledge_chunks WHERE embedding_id LIKE ?", [f"{upload_id}_%"])
+                conn.execute("DELETE FROM upload_records WHERE id = ?", [upload_id])
+            saved_path.unlink(missing_ok=True)
+            raise RuntimeError("向量索引失败，请稍后重试") from exc
 
     # 5. 更新会话状态为 completed
     session.status = "completed"

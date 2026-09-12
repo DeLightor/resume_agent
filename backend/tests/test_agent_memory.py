@@ -359,11 +359,50 @@ def test_runner_memory_injection_and_extraction(initialized_db: Any) -> None:
     assert new_memories[0].type == "correction"
     assert new_memories[0].source == "auto_inferred"
 
-    # 验证初次调用 LLM 时 system prompt 包含预置记忆
+    # 验证初次调用 LLM 时 system prompt 包含预置记忆。记忆规则必须作为
+    # 独立快照保存，才能在用户随后删除规则时从同一会话中撤回。
     first_call_msgs = llm.calls[0]["messages"]
-    sys_msg = first_call_msgs[0]["content"]
-    assert "用户个性化长期偏好与历史纠偏" in sys_msg
-    assert "优先采用量化指标描述成果" in sys_msg
+    assert any(
+        message["role"] == "system"
+        and message["content"].startswith("【会话最新记忆规则】")
+        and "用户个性化长期偏好与历史纠偏" in message["content"]
+        and "优先采用量化指标描述成果" in message["content"]
+        for message in first_call_msgs
+    )
+    # 新一轮自动提炼的规则也必须在同一次 LLM 调用中生效。
+    assert any(
+        message["role"] == "system" and "技术栈禁止出现精通" in message["content"]
+        for message in first_call_msgs
+    )
+
+    # 后续轮次更新同一份记忆快照，不能为相同规则持续追加 system 消息。
+    asyncio.run(runner.run(session.id, user_message="继续帮我优化这一段"))
+    persisted = store.get_session(session.id, initialized_db)
+    assert persisted is not None
+    assert sum(
+        message["role"] == "system"
+        and str(message["content"]).startswith("【会话最新记忆规则】")
+        for message in persisted.messages
+    ) == 1
+
+    # 删除全部活跃记忆后，下一轮不得继续携带旧快照。
+    for memory in list_memories(db_path=initialized_db):
+        delete_memory(memory.id, db_path=initialized_db)
+    asyncio.run(runner.run(session.id, user_message="请按当前规则继续"))
+    persisted = store.get_session(session.id, initialized_db)
+    assert persisted is not None
+    assert not any(
+        message["role"] == "system"
+        and str(message["content"]).startswith("【会话最新记忆规则】")
+        for message in persisted.messages
+    )
+    latest_call_system_content = "\n".join(
+        str(message["content"])
+        for message in llm.calls[-1]["messages"]
+        if message["role"] == "system"
+    )
+    assert "优先采用量化指标描述成果" not in latest_call_system_content
+    assert "技术栈禁止出现精通" not in latest_call_system_content
 
 
 def test_reviewer_memory_injection(initialized_db: Any) -> None:
@@ -518,5 +557,3 @@ def test_runner_emits_memory_deleted_event(initialized_db: Any) -> None:
     assert len(del_events) == 1
     assert del_events[0]["memory_id"] == m.id
     assert "精通" in del_events[0]["content"]
-
-
