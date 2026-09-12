@@ -94,7 +94,7 @@ Resume-Agent 把简历当代码仓库来管：Master 主干分化出方向分支
 - [x] 模板选择器：卡片式预览，点击切换
 - [x] 实时预览：编辑内容后预览区即时刷新
 - [x] AI 生成内容自动填充到模板对应字段
-- [ ] 模板内容可内联编辑（点击文字直接修改）
+- [x] 模板内容可内联编辑（点击文字直接修改）
 - [x] PDF 导出与预览一致（所见即所得）
 - [x] 模板 JSON Schema 与排版分离（同一数据源，多模板渲染）
 
@@ -117,7 +117,7 @@ Resume-Agent 把简历当代码仓库来管：Master 主干分化出方向分支
 - [x] 逐字段对比：新增（绿）/删除（红）/修改（黄）高亮
 - [x] 支持 experience / projects / skills 三大段落
 - [x] 差异列表可折叠/展开
-- [ ] 差异内容可复制到剪贴板
+- [x] 差异内容可复制到剪贴板
 
 #### US-11：AI 导师学习建议（C3）✅
 **As a** 求职者，**I want** 基于 Gap 报告获得学习资源推荐，**so that** 我知道面试前该补什么。
@@ -567,7 +567,7 @@ LLM 无法真正验证经历是否客观发生过，只能检测 AI 套话、前
 - [x] SQLite 路径默认 `~/.resume-agent/data.db`（Windows 下 `%USERPROFILE%\.resume-agent\`）
 - [x] Docker Compose 方式完整支持 Windows Docker Desktop
 - [x] README 补充 Windows 安装说明 + 常见问题 FAQ
-- [ ] CI 增加 Windows 矩阵测试（可选）
+- [ ] CI 增加 Windows 矩阵测试（可选，尚未安排）
 
 ### Technical Specifications
 
