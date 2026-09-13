@@ -75,7 +75,7 @@ export default function GlobalToolbar({
         </svg>
         Resume-Agent
         <span className="font-mono text-xs text-text-muted bg-bg-tertiary px-2 py-px rounded-sm tracking-wider">
-          v0.3.1
+          v2.0.0
         </span>
       </div>
 

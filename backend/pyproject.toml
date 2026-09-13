@@ -1,7 +1,7 @@
 [project]
 name = "resume-agent"
-version = "0.1.0"
-description = "Resume-Agent MVP backend: FastAPI + SQLite + Chroma."
+version = "2.0.0"
+description = "Resume-Agent backend: FastAPI + SQLite + Chroma + Agent Loop."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }
