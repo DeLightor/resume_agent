@@ -42,14 +42,14 @@
 
 > *“简历太多改崩了？让 Resume-Agent 跃出屏幕，把杂乱简历一键重组为清晰的 Git 代码森林。”*
 
-<div align="center">
-  <video src="docs/videos/promo.mp4" poster="docs/images/video_poster.png" controls width="95%" playsinline loop>
-    <source src="docs/videos/promo.mp4" type="video/mp4">
-  </video>
-  <p>
-    <sub>▲ 点击播放 10 秒宣传概念片（或直接查看 <a href="docs/videos/promo.mp4">高清 MP4 原片</a> / <a href="docs/images/promo_preview.gif">动态 GIF 预览</a>）</sub>
-  </p>
-</div>
+<p align="center">
+  <a href="docs/videos/promo.mp4" title="点击观看/下载 1080P 高清原声视频">
+    <img src="docs/images/promo_preview.gif" alt="Resume-Agent 10秒概念演示动画" width="95%" />
+  </a>
+</p>
+<p align="center">
+  <sub>▲ 动态演示循环预览（点击画面即可观看/下载 <a href="docs/videos/promo.mp4">🔊 1080P 高清原声视频</a>）</sub>
+</p>
 
 <a id="核心特性"></a>
 ## ✨ 核心特性
