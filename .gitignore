@@ -68,3 +68,6 @@ contest/
 
 # === Local agent configuration and skills (do not commit) ===
 .agents/
+
+# === 本地设计物料（本地保留，不入库） ===
+materials/

@@ -1,31 +1,54 @@
-# Resume-Agent v2.0
+<div align="center">
+  <a href="https://github.com/DeLightor/resume_agent">
+    <img src="docs/images/logo.png" alt="Resume-Agent Logo" width="130" height="130" />
+  </a>
+  <h1 align="center">Resume-Agent v2.0</h1>
+  <p align="center">
+    <strong>把简历当代码仓库来管：Git 式版本树 + RAG 知识库 + 智能体双审编排 + 全生命周期求职工作台</strong>
+  </p>
 
-[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](https://github.com/DeLightor/resume_agent)
-[![Python](https://img.shields.io/badge/python-3.10+-brightgreen.svg)](https://python.org)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688.svg)](https://fastapi.tiangolo.com)
-[![React](https://img.shields.io/badge/react-18.3-61dafb.svg)](https://react.dev)
-[![Tests](https://img.shields.io/badge/tests-480+--passing-brightgreen.svg)](tests)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+  <p align="center">
+    <a href="https://github.com/DeLightor/resume_agent/releases/tag/v2.0.0"><img src="https://img.shields.io/badge/version-2.0.0-blue.svg" alt="Version"></a>
+    <a href="https://python.org"><img src="https://img.shields.io/badge/python-3.10+-brightgreen.svg" alt="Python"></a>
+    <a href="https://fastapi.tiangolo.com"><img src="https://img.shields.io/badge/FastAPI-0.115+-009688.svg" alt="FastAPI"></a>
+    <a href="https://react.dev"><img src="https://img.shields.io/badge/react-18.3-61dafb.svg" alt="React"></a>
+    <a href="tests"><img src="https://img.shields.io/badge/tests-480+--passing-brightgreen.svg" alt="Tests"></a>
+    <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License"></a>
+  </p>
 
-> **把简历当代码仓库来管**：Git 式版本树 + RAG 知识库 + 智能体双审编排 + 全生命周期求职工作台。
+  <p align="center">
+    <a href="#快速开始">快速开始</a> •
+    <a href="#核心特性">核心特性</a> •
+    <a href="#核心功能与界面演示">界面演示</a> •
+    <a href="#技术栈">技术栈</a> •
+    <a href="#功能概览">功能清单</a> •
+    <a href="#项目结构">项目结构</a> •
+    <a href="#windows-常见问题">常见问题</a> •
+    <a href="PRD-v2.0.md">v2.0 规格文档</a>
+  </p>
+</div>
 
-技术求职者手里从来不是「一份简历」，而是十几份针对不同公司、不同方向裁剪过的版本。**Resume-Agent v2.0** 用 Git 的方式管理这整片「简历森林」——Master 主干分化方向分支，分支长出公司专属节点，改一次主干所有子分支自动继承。系统内置原生自驱动智能体引擎与 Reviewer 双审机制，配合投递看板与素材挖掘，让求职全流程迈入 2.0 智能化时代。
+<br/>
 
 <p align="center">
   <img src="docs/images/homepage.png" alt="Resume-Agent v2.0 智能工作台首页" width="100%" />
 </p>
 
-### 核心亮点
+> **面向技术求职者的下一代智能简历工作台**：求职者手里从来不是「一份简历」，而是十几份针对不同公司、不同方向裁剪过的版本。**Resume-Agent v2.0** 用 Git 的方式管理这整片「简历森林」——Master 主干分化方向分支，分支长出公司专属节点，改一次主干所有子分支自动继承。系统内置原生自驱动智能体引擎与 Reviewer 双审机制，配合投递追踪看板与素材挖掘，让求职全流程全面迈入 2.0 智能化时代。
 
-- 🌲 **Git 式简历版本树**：Master 主干 → 方向分支 → 公司节点，支持细粒度继承与内容级选择性变更合并。
-- 🤖 **原生 Agent Loop 架构**：工具注册表驱动自主调用，SSE 实时流式响应，多步动作链路清晰透明。
-- 🛡️ **Reviewer Agent 双审机制**：独立上下文审查，严守知识库事实边界，杜绝 AI 虚构量化数据与套话。
-- 📑 **两阶段解析与置信度核对**：多模态旧简历解析后支持逐字段置信度校验与修正，杜绝脏数据污染知识库。
-- 🔒 **工业级编辑保护三件套**：800ms 防抖自动存盘、乐观并发锁版本控制、20 步撤销重做（⌘Z/⌘⇧Z）与 30 天软删除回收站。
-- 🎯 **求职全生命周期闭环**：支持零实习应届生 STAR 对话素材挖掘，集成岗位投递看板与版本快照冻结。
-- 📄 **ATS 友好与物理分页对齐**：6 套专业简历模板，前端 A4 分页虚线感知与 ReportLab PDF 导出严格像素级对齐。
+<a id="核心特性"></a>
+## ✨ 核心特性
 
-## 快速开始
+- 🌲 **Git 式简历版本树**：Master 主干 → 方向分支 → 岗位专属定制节点，多版本并行演进，支持条目级与段落级可视化选择性合并。
+- 🤖 **原生 Agent Loop 架构**：自研工具注册表驱动自主调度，SSE 实时流式响应（`thinking` / `tool_call` / `review` / `draft`），状态完全透明。
+- 🛡️ **Reviewer Agent 双审机制**：独立审查上下文，严守知识库事实边界，杜绝 AI 虚构量化数据，套话拦截并给出专业修改意见。
+- 📑 **两阶段解析与置信度核对**：多模态旧简历解析后支持逐字段置信度标记与可视化修正，杜绝脏数据污染版本树与 RAG 向量库。
+- 🔒 **工业级编辑保护三件套**：800ms 防抖自动存盘、乐观并发锁版本控制、20 步历史撤销重做（⌘Z/⌘⇧Z）与 30 天软删除回收站。
+- 🎯 **求职全生命周期闭环**：支持零实习应届生 STAR 对话素材挖掘，集成岗位投递看板与投递时点简历快照冻结。
+- 📄 **ATS 友好与物理分页对齐**：6 套精美专业简历模板，前端 A4 分页虚线感知与 ReportLab PDF 导出严格像素级对齐。
+
+<a id="快速开始"></a>
+## 🚀 快速开始
 
 ### 方式一：Docker Compose（推荐）
 
@@ -143,7 +166,8 @@ CHROMA_PATH=~/.resume-agent/chroma
 FILES_ROOT=~/.resume-agent/files
 ```
 
-## 技术栈
+<a id="技术栈"></a>
+## 🛠️ 技术栈
 
 | 层 | 技术 | 说明 |
 |----|------|------|
@@ -158,7 +182,8 @@ FILES_ROOT=~/.resume-agent/files
 | **PDF 排版引擎** | ReportLab (Python) | ATS 友好、文本可选可解析，支持 CJK 中文字体，前端物理 A4 分页虚线对齐 |
 | **部署与运维** | Docker Compose / 原生轻量脚本 | 单容器镜像封装，支持 macOS / Linux (`install.sh`) 与 Windows (`install.ps1`) |
 
-## 核心功能与界面演示
+<a id="核心功能与界面演示"></a>
+## 📸 核心功能与界面演示
 
 ### 1. Git 式简历版本树与全生命周期工作台
 把简历当代码仓库管理：Master 主干分化方向分支，分支派生公司专属定制。右侧全局集成 AI 对话助手、职位截图分析、技能盲区诊断与投递追踪。
@@ -202,7 +227,8 @@ FILES_ROOT=~/.resume-agent/files
   <img src="docs/images/preview_branches.png" alt="简历版本分支与预览" width="95%" />
 </p>
 
-## 功能概览
+<a id="功能概览"></a>
+## 📋 功能概览
 
 ### v2.0 智能体架构与全生命周期工作台（全新升级）
 
@@ -270,7 +296,8 @@ FILES_ROOT=~/.resume-agent/files
 | AI 简历生成 | 检索 → 反思审核 → 撰写润色（3 步工作流，不依赖 LangGraph） |
 | PDF 导出 | ATS 友好模板，文本可选可解析，支持中文 |
 
-## 项目结构
+<a id="项目结构"></a>
+## 📂 项目结构
 
 ```
 resume-agent/
@@ -308,7 +335,8 @@ resume-agent/
 └── .env.example
 ```
 
-## 开发命令
+<a id="开发命令"></a>
+## 💻 开发命令
 
 ### macOS / Linux
 
@@ -330,7 +358,8 @@ powershell -ExecutionPolicy Bypass -File Makefile.ps1 test
 powershell -ExecutionPolicy Bypass -File Makefile.ps1 build
 ```
 
-## 数据存储
+<a id="数据存储"></a>
+## 💾 数据存储
 
 所有数据默认存储在 `~/.resume-agent/`（Windows 为 `%USERPROFILE%\.resume-agent\`）：
 
@@ -341,7 +370,8 @@ powershell -ExecutionPolicy Bypass -File Makefile.ps1 build
 └── files/           # 上传的原始文件 + 导出的 PDF
 ```
 
-## Windows 常见问题
+<a id="常见问题"></a>
+## ❓ 常见问题 (FAQ)
 
 <details>
 <summary>Q: 运行 <code>.\Makefile.ps1 dev</code> 弹出了记事本</summary>
