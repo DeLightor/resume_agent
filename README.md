@@ -18,6 +18,7 @@
 
   <p align="center">
     <a href="#快速开始">快速开始</a> •
+    <a href="#概念视频">概念视频</a> •
     <a href="#核心特性">核心特性</a> •
     <a href="#核心功能与界面演示">界面演示</a> •
     <a href="#技术栈">技术栈</a> •
@@ -35,6 +36,20 @@
 </p>
 
 > **面向技术求职者的下一代智能简历工作台**：求职者手里从来不是「一份简历」，而是十几份针对不同公司、不同方向裁剪过的版本。**Resume-Agent v2.0** 用 Git 的方式管理这整片「简历森林」——Master 主干分化方向分支，分支长出公司专属节点，改一次主干所有子分支自动继承。系统内置原生自驱动智能体引擎与 Reviewer 双审机制，配合投递追踪看板与素材挖掘，让求职全流程全面迈入 2.0 智能化时代。
+
+<a id="概念视频"></a>
+## 🎬 概念演示视频
+
+> *“简历太多改崩了？让 Resume-Agent 跃出屏幕，把杂乱简历一键重组为清晰的 Git 代码森林。”*
+
+<div align="center">
+  <video src="docs/videos/promo.mp4" poster="docs/images/video_poster.png" controls width="95%" playsinline loop>
+    <source src="docs/videos/promo.mp4" type="video/mp4">
+  </video>
+  <p>
+    <sub>▲ 点击播放 10 秒宣传概念片（或直接查看 <a href="docs/videos/promo.mp4">高清 MP4 原片</a> / <a href="docs/images/promo_preview.gif">动态 GIF 预览</a>）</sub>
+  </p>
+</div>
 
 <a id="核心特性"></a>
 ## ✨ 核心特性
@@ -323,7 +338,8 @@ resume-agent/
 │   │   └── types/        # TypeScript 类型定义
 │   └── vite.config.ts
 ├── docs/                 # 项目文档与物料
-│   └── images/           # README 与文档视觉素材截图
+│   ├── images/           # README 与文档视觉素材截图
+│   └── videos/           # 概念演示视频与产品动画
 ├── PRD-v2.0.md           # v2.0 需求与架构规格说明书
 ├── PRD.md                # v1.x 历史需求说明书
 ├── docker-compose.yml
