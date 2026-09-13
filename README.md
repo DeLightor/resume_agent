@@ -43,12 +43,9 @@
 > *“简历太多改崩了？让 Resume-Agent 跃出屏幕，把杂乱简历一键重组为清晰的 Git 代码森林。”*
 
 <p align="center">
-  <a href="docs/videos/promo.mp4" title="点击观看/下载 1080P 高清原声视频">
-    <img src="docs/images/promo_preview.gif" alt="Resume-Agent 10秒概念演示动画" width="95%" />
+  <a href="docs/videos/promo.mp4">
+    <img src="docs/images/promo_preview.gif" alt="Resume-Agent 概念演示视频" width="75%" />
   </a>
-</p>
-<p align="center">
-  <sub>▲ 动态演示循环预览（点击画面即可观看/下载 <a href="docs/videos/promo.mp4">🔊 1080P 高清原声视频</a>）</sub>
 </p>
 
 <a id="核心特性"></a>
